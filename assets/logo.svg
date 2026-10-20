@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="170 170 684 684" width="684" height="684">
+  <defs>
+    <!-- Subtle edge shadow ensuring high contrast on white, light, or dark backgrounds -->
+    <filter id="dn-shadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.16"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#dn-shadow)">
+    <!-- Document Upper Blue -->
+    <path d="M 727 271 L 418 270 L 294 400 L 297 708 L 320 704 L 328 704 L 304 723 L 294 729 L 294 763 L 297 762 L 343 717 L 399 657 L 469 576 L 639 371 Z" fill="#2E46AA"/>
+
+    <!-- Fold Flap (Clean sharp vector triangle) -->
+    <path d="M 418 270 L 294 400 L 418 400 Z" fill="#256CD2"/>
+
+    <!-- Document Lower Cyan -->
+    <path d="M 728 444 L 671 501 L 552 611 L 464 695 L 385 775 L 330 834 L 317 850 L 341 849 L 349 838 L 367 818 L 368 822 L 363 850 L 729 849 L 729 506 L 723 506 L 693 513 L 688 512 L 728 480 Z" fill="#09BDCE"/>
+
+    <!-- Blue Kinetic Shards -->
+    <path d="M 277 736 L 245 743 L 246 749 L 252 764 L 254 766 L 277 744 L 278 738 Z" fill="#2E46AA"/>
+
+    <!-- Cyan Kinetic Shards -->
+    <path d="M 338 866 L 336 866 L 313 893 L 318 894 L 341 890 Z" fill="#09BDCE"/>
+    <path d="M 273 790 L 231 808 L 230 811 L 239 826 L 244 826 L 271 794 Z" fill="#09BDCE"/>
+    <path d="M 780 492 L 770 474 L 744 491 L 743 493 Z" fill="#09BDCE"/>
+    <path d="M 782 404 L 780 404 L 772 415 L 752 439 L 751 443 L 793 422 Z" fill="#09BDCE"/>
+
+    <!-- White Needle with Transparent Eyelet -->
+    <path d="M 741 338 L 733 335 L 723 335 L 704 343 L 679 363 L 658 385 L 563 502 L 296 819 L 372 748 L 601 528 L 688 448 L 721 415 L 743 386 L 752 364 L 751 350 L 749 346 Z M 726 367 L 725 378 L 719 389 L 709 402 L 685 425 L 677 430 L 671 432 L 665 432 L 659 425 L 660 416 L 665 406 L 678 389 L 693 374 L 705 365 L 715 361 L 719 361 Z" fill="#FFFFFF" stroke="#0F172A" stroke-width="8" stroke-linejoin="round" fill-rule="evenodd"/>
+  </g>
+</svg>

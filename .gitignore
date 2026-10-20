@@ -1,0 +1,89 @@
+# ==============================================================================
+# DocNeedle Unified .gitignore
+# ==============================================================================
+
+# --- OS & Editor Artifacts ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- Environment & Secrets ---
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# --- Python & Backend ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+ENV/
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# --- Node & Frontend ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnp
+.pnp.js
+.nyc_output/
+
+# --- DocNeedle ML Models & Weights (Zero Disk Leakage) ---
+models/
+**/models/
+*.gguf
+*.bin
+*.onnx
+*.onnx_data
+*.safetensors
+*.pt
+*.metadata
+*.incomplete
+.cache/
+**/download/
+
+# Preserve Dependency Lock Files
+!uv.lock
+!package-lock.json
+!pnpm-lock.yaml
+!yarn.lock
+
+# --- Temporary Files & Logs ---
+*.log
+tmp/
+temp/
+
+# --- Others ---
+AGENTS.md

@@ -1,0 +1,55 @@
+[project]
+name = "docneedle"
+version = "0.1.0"
+description = "Privacy-first local RAG document extraction microservice"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "python-multipart>=0.0.12",
+    "httpx>=0.27.0",
+    "numpy>=2.0.0",
+    "gradio>=5.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+]
+ml = [
+    "docling>=2.15.0",
+    "onnxruntime>=1.19.0",
+    "rapidocr>=3.0.0",
+    "sentence-transformers>=3.2.0",
+    "rank-bm25>=0.2.2",
+    "llama-cpp-python>=0.3.0",
+    "pypdfium2>=4.30.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/docneedle"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["EXE002"]
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
