@@ -150,7 +150,7 @@ def _extract_box_props(box: Any, text: str) -> BoundingBoxProps | None:
     try:
         xs = [float(pt[0]) for pt in box]
         ys = [float(pt[1]) for pt in box]
-    except (TypeError, ValueError, IndexError):
+    except (TypeError, ValueError, IndexError):  # fmt: skip
         return None
 
     if len(xs) < 4 or len(ys) < 4:
@@ -291,16 +291,99 @@ def format_ocr_layout(boxes: Any, txts: Sequence[str]) -> str:
     return _format_layout_lines(lines)
 
 
+def _extract_raw_ocr_text(res: Any) -> str:
+    """Extract raw text string from RapidOCR output object or legacy tuple."""
+    if res is None:
+        return ""
+
+    if hasattr(res, "txts"):
+        if not res.txts:
+            return ""
+        boxes = getattr(res, "boxes", None)
+        layout_text = format_ocr_layout(boxes, res.txts)
+        if layout_text:
+            return layout_text
+        if hasattr(res, "to_markdown"):
+            md = res.to_markdown()
+            if isinstance(md, str) and md.strip():
+                return md.strip()
+        return "\n".join(str(t).strip() for t in res.txts if str(t).strip())
+
+    if isinstance(res, tuple):
+        items = res[0]
+        if not items:
+            return ""
+        lines: list[str] = []
+        for item in items:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                txt = str(item[1]).strip()
+            else:
+                txt = str(item).strip()
+            if txt:
+                lines.append(txt)
+        return "\n".join(lines)
+
+    return ""
+
+
+def _resolve_ocr_use_cuda(use_cuda_override: bool | None = None) -> bool:
+    """Determine whether RapidOCR should run on ONNX Runtime CUDAExecutionProvider."""
+    want_cuda = (
+        use_cuda_override
+        if use_cuda_override is not None
+        else (settings.gpu_enabled and settings.ocr_use_cuda)
+    )
+    if not want_cuda:
+        return False
+
+    try:
+        from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+        preload_cuda_runtime_libs()
+    except Exception as e:
+        logger.debug("CUDA runtime preload before OCR check failed: %s", e)
+
+    try:
+        import onnxruntime as ort
+
+        if hasattr(ort, "preload_dlls"):
+            try:
+                ort.preload_dlls(directory="")
+            except Exception as e:
+                logger.debug("onnxruntime.preload_dlls() notice: %s", e)
+
+        has_cuda_ep = (
+            ort.get_device() == "GPU" and "CUDAExecutionProvider" in ort.get_available_providers()
+        )
+        if not has_cuda_ep:
+            logger.info(
+                "RapidOCR GPU requested, but CUDAExecutionProvider is unavailable "
+                "(device=%s, providers=%s); running on CPUExecutionProvider.",
+                ort.get_device(),
+                ort.get_available_providers(),
+            )
+        return has_cuda_ep
+    except Exception as e:
+        logger.debug("Could not verify ONNX Runtime CUDA provider: %s", e)
+        return False
+
+
 class EphemeralRapidOCREngine:
     """Manages ephemeral in-process RapidOCR inference with immediate RAM/VRAM deallocation.
 
     Loads the ONNX Runtime detection, direction classification, and recognition models
-    on entering context, performs zero-parameter multilingual transcription in RAM,
+    on entering context, performs zero-parameter multilingual transcription in RAM/VRAM,
     and frees all session references and native memory on exit.
     """
 
-    def __init__(self, text_score: float | None = None) -> None:
+    def __init__(
+        self,
+        text_score: float | None = None,
+        use_cuda: bool | None = None,
+    ) -> None:
         self.text_score = settings.ocr_text_score if text_score is None else text_score
+        self.use_cuda = use_cuda
+        self.active_use_cuda: bool = False
         self.ocr: Any = None
         self._lock = threading.Lock()
 
@@ -309,22 +392,43 @@ class EphemeralRapidOCREngine:
 
         det_tier = ModelType(settings.ocr_det_model_type.lower())
         rec_tier = ModelType(settings.ocr_rec_model_type.lower())
+        use_cuda = _resolve_ocr_use_cuda(self.use_cuda)
+        self.active_use_cuda = use_cuda
+        ep_label = (
+            f"CUDAExecutionProvider (device={settings.ocr_gpu_device_id})"
+            if use_cuda
+            else "CPUExecutionProvider"
+        )
         logger.info(
-            "Loading ephemeral RapidOCR engine (ONNX Runtime, det=%s, rec=%s)...",
+            "Loading ephemeral RapidOCR engine (ONNX Runtime %s, det=%s, rec=%s)...",
+            ep_label,
             det_tier.value,
             rec_tier.value,
         )
-        params = {
+        params: dict[str, Any] = {
             "Global.text_score": self.text_score,
             "Global.max_side_len": settings.ocr_longest_edge,
             "Global.use_cls": False,
             "Det.model_type": det_tier,
             "Rec.model_type": rec_tier,
+            "Rec.rec_batch_num": settings.ocr_rec_batch_num if use_cuda else 6,
             "Det.limit_side_len": settings.ocr_det_limit_side_len,
             "Det.box_thresh": settings.ocr_det_box_thresh,
             "Det.unclip_ratio": settings.ocr_det_unclip_ratio,
-            "EngineConfig.onnxruntime.use_cuda": False,
+            "EngineConfig.onnxruntime.use_cuda": use_cuda,
         }
+        if use_cuda:
+            params.update(
+                {
+                    "EngineConfig.onnxruntime.cuda_ep_cfg.device_id": settings.ocr_gpu_device_id,
+                    "EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search": (
+                        settings.ocr_cuda_conv_algo_search
+                    ),
+                    "EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy": (
+                        settings.ocr_cuda_arena_extend_strategy
+                    ),
+                }
+            )
         try:
             self.ocr = RapidOCR(params=params)
         except TypeError:
@@ -333,8 +437,9 @@ class EphemeralRapidOCREngine:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        logger.info("Evicting ephemeral RapidOCR engine from RAM...")
+        logger.info("Evicting ephemeral RapidOCR engine from RAM/VRAM...")
         self.ocr = None
+        self.active_use_cuda = False
         gc.collect()
         logger.info("Ephemeral RapidOCR memory successfully reclaimed.")
 
@@ -357,37 +462,7 @@ class EphemeralRapidOCREngine:
         with self._lock:
             res = self.ocr(img_array)
 
-        if res is None:
-            return ""
-
-        raw_text = ""
-        if hasattr(res, "txts"):
-            if not res.txts:
-                return ""
-            boxes = getattr(res, "boxes", None)
-            layout_text = format_ocr_layout(boxes, res.txts)
-            if layout_text:
-                raw_text = layout_text
-            elif hasattr(res, "to_markdown"):
-                md = res.to_markdown()
-                if isinstance(md, str) and md.strip():
-                    raw_text = md.strip()
-            if not raw_text:
-                raw_text = "\n".join(str(t).strip() for t in res.txts if str(t).strip())
-        elif isinstance(res, tuple):
-            items = res[0]
-            if not items:
-                return ""
-            lines: list[str] = []
-            for item in items:
-                if isinstance(item, (list, tuple)) and len(item) >= 2:
-                    txt = str(item[1]).strip()
-                else:
-                    txt = str(item).strip()
-                if txt:
-                    lines.append(txt)
-            raw_text = "\n".join(lines)
-
+        raw_text = _extract_raw_ocr_text(res)
         return normalize_turkish_ocr_artifacts(raw_text.strip())
 
 

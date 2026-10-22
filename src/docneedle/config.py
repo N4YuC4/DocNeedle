@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     model_storage_dir: str = Field(default_factory=_resolve_model_dir)
     max_upload_size_mb: int = 50
     ocr_enabled: bool = True
+    ocr_use_cuda: bool = True
+    ocr_gpu_device_id: int = 0
+    ocr_rec_batch_num: int = 16
+    ocr_cuda_conv_algo_search: str = "HEURISTIC"
+    ocr_cuda_arena_extend_strategy: str = "kSameAsRequested"
     ocr_model_name: str = "RapidOCR (PP-OCRv6 Det-Small / Rec-Small ONNX)"
     ocr_det_model_type: str = "small"
     ocr_rec_model_type: str = "small"
@@ -160,7 +165,6 @@ class Settings(BaseSettings):
     ocr_det_limit_side_len: int = 960
     ocr_det_box_thresh: float = 0.4
     ocr_det_unclip_ratio: float = 1.8
-    max_ocr_pages: int = 5
     ocr_pdf_render_scale: float = 1.6
     pdf_embedded_text_min_chars: int = 50
     pdf_embedded_text_max_check_pages: int = 5
@@ -210,7 +214,7 @@ class Settings(BaseSettings):
         "Given a web search query, retrieve relevant passages that answer the query"
     )
 
-    # 7. Extraction Service & LLM Inference (Gemma-4-E2B-it-qat-UD-Q4_K_XL GGUF)
+    # 7. Extraction Service & LLM Inference (Local GGUF Model)
     extraction_top_k: int = 5
     extraction_context_delimiter: str = "\n\n---\n\n"
     llm_model_name: str = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
@@ -221,19 +225,32 @@ class Settings(BaseSettings):
     llm_single_field_max_tokens: int = 128
     llm_thinking_max_tokens: int = 512
     llm_enable_thinking: bool = False
+    llm_log_extraction_payloads: bool = False
+    llm_domain_rules: str = (
+        "4. Domain specifics:\n"
+        "   - In rental contracts, 'Kira Bedeli' represents the agreed rent / monthly rent "
+        "('aylık kira bedeli'). Extract this stated amount directly (e.g., '25.000 TL').\n"
+        "   - For first name ('ad' / 'isim'), extract ONLY the given first name "
+        "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', first name is 'TOLGA').\n"
+        "   - For surname ('soyad' / 'soyisim'), extract ONLY the family surname "
+        "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', surname is 'ARSLAN').\n"
+        "   - NEVER concatenate adjacent column values, parent names ('baba adı', 'ana adı'), "
+        "gender, dates, or locations into the person's name.\n"
+    )
     llm_stop_tokens: list[str] = Field(
         default_factory=lambda: [
             "</s>",
-            "[/INST]",
-            "[INST]",
             "<turn|>",
             "<end_of_turn>",
             "<|turn>",
+            "<|im_end|>",
+            "<|eot_id|>",
         ]
     )
     # Speculative Decoding (Prompt Lookup Decoding)
     llm_speculative_enabled: bool = True
     llm_speculative_cpu_enabled: bool = False
+    llm_speculative_max_vocab_size: int = 65536
     llm_speculative_num_pred_tokens: int = 5
     llm_speculative_max_ngram_size: int = 2
     confidence_found_score: float = 0.95

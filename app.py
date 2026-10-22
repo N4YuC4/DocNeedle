@@ -20,7 +20,7 @@ try:
     import spaces
 
     gpu_decorator = spaces.GPU
-except (ImportError, Exception):
+except Exception:
 
     def gpu_decorator(*args, **kwargs):
         if args and callable(args[0]):
@@ -60,22 +60,6 @@ try:
     ensure_all_models_present(settings.model_storage_dir)
 except Exception as e:
     logger.warning(f"Automatic model download check failed or bypassed: {e}")
-
-try:
-    from rapidocr import ModelType, RapidOCR
-
-    logger.info("Pre-warming RapidOCR models...")
-    _det = ModelType(settings.ocr_det_model_type.lower())
-    _rec = ModelType(settings.ocr_rec_model_type.lower())
-    _ = RapidOCR(
-        params={
-            "Det.model_type": _det,
-            "Rec.model_type": _rec,
-            "EngineConfig.onnxruntime.use_cuda": False,
-        }
-    )
-except Exception as e:
-    logger.warning("RapidOCR model pre-warm check bypassed: %s", e)
 
 
 CUSTOM_CSS = """
@@ -354,6 +338,60 @@ INITIAL_STARTER_FIELDS = [
     ("", "", "string"),
 ]
 
+DEFAULT_EXAMPLE_SCHEMA: list[dict[str, str]] = [
+    {
+        "key": "example_field",
+        "description": "Describe what you want to extract from the document",
+        "type": "string",
+    }
+]
+
+
+def resolve_field_type(raw_type: Any) -> str:
+    """Normalize raw field type string against TYPE_MAP and FIELD_TYPE_KEYS."""
+    t = str(raw_type).strip().lower() if raw_type else "string"
+    if t in ("none", "n/a", ""):
+        return "string"
+    resolved = TYPE_MAP.get(t, t)
+    return resolved if resolved in FIELD_TYPE_KEYS else "string"
+
+
+def collect_form_items(
+    q_vals: list[Any] | tuple[Any, ...],
+    k_vals: list[Any] | tuple[Any, ...],
+    t_vals: list[Any] | tuple[Any, ...],
+    vis_vals: list[bool] | None = None,
+) -> list[dict[str, str]]:
+    """Collect normalized extraction item dicts from form builder inputs."""
+    items: list[dict[str, str]] = []
+    num_fields = min(len(q_vals), len(k_vals), len(t_vals))
+    for i in range(num_fields):
+        q = str(q_vals[i]).strip() if q_vals[i] else ""
+        k = str(k_vals[i]).strip() if k_vals[i] else ""
+        is_vis = vis_vals[i] if vis_vals is not None and i < len(vis_vals) else True
+        if not is_vis and not (q or k):
+            continue
+        if q or k:
+            items.append(
+                {
+                    "key": k or q or f"item_{len(items) + 1}",
+                    "description": q or k,
+                    "type": resolve_field_type(t_vals[i]),
+                }
+            )
+    return items
+
+
+def unpack_field_args(
+    field_args: tuple[Any, ...],
+    num_fields: int = MAX_FIELDS,
+) -> tuple[tuple[Any, ...], tuple[Any, ...], tuple[Any, ...]]:
+    """Unpack flattened Gradio form arguments into (questions, keys, types) slices."""
+    q_vals = field_args[0:num_fields]
+    k_vals = field_args[num_fields : 2 * num_fields]
+    t_vals = field_args[2 * num_fields : 3 * num_fields]
+    return q_vals, k_vals, t_vals
+
 
 def parse_raw_json_schema(raw_json: str) -> list[dict[str, str]]:
     """Parse raw JSON string into a validated list of extraction item dicts."""
@@ -383,10 +421,7 @@ def parse_raw_json_schema(raw_json: str) -> list[dict[str, str]]:
             or item.get("desc")
             or ""
         ).strip()
-        t = str(item.get("type", "string")).strip().lower()
-        resolved_t = TYPE_MAP.get(t, t) if t not in ("none", "n/a", "") else "string"
-        if resolved_t not in FIELD_TYPE_KEYS:
-            resolved_t = "string"
+        resolved_t = resolve_field_type(item.get("type", "string"))
 
         if key or desc:
             final_key = key or desc or f"item_{idx + 1}"
@@ -402,48 +437,25 @@ def parse_raw_json_schema(raw_json: str) -> list[dict[str, str]]:
 
 
 def serialize_form_to_json(
-    q_vals: list[Any],
-    k_vals: list[Any],
-    t_vals: list[Any],
+    q_vals: list[Any] | tuple[Any, ...],
+    k_vals: list[Any] | tuple[Any, ...],
+    t_vals: list[Any] | tuple[Any, ...],
     vis_vals: list[bool] | None = None,
 ) -> str:
     """Convert form fields to formatted JSON string."""
-    items: list[dict[str, str]] = []
-    num_fields = min(len(q_vals), len(k_vals), len(t_vals))
-    for i in range(num_fields):
-        is_vis = vis_vals[i] if vis_vals is not None and i < len(vis_vals) else True
-        if not is_vis:
-            continue
-        q = str(q_vals[i]).strip() if q_vals[i] else ""
-        k = str(k_vals[i]).strip() if k_vals[i] else ""
-        t = str(t_vals[i]).strip().lower() if t_vals[i] else "string"
-        resolved_t = TYPE_MAP.get(t, t) if t not in ("none", "n/a", "") else "string"
-        if resolved_t not in FIELD_TYPE_KEYS:
-            resolved_t = "string"
-
-        if q or k:
-            items.append(
-                {
-                    "key": k or q or f"item_{len(items) + 1}",
-                    "description": q or k,
-                    "type": resolved_t,
-                }
-            )
-
-    if not items:
-        return json.dumps(
-            [
-                {
-                    "key": "example_field",
-                    "description": "Describe what you want to extract from the document",
-                    "type": "string",
-                }
-            ],
-            indent=2,
-            ensure_ascii=False,
-        )
-
+    items = collect_form_to_items_or_default(q_vals, k_vals, t_vals, vis_vals)
     return json.dumps(items, indent=2, ensure_ascii=False)
+
+
+def collect_form_to_items_or_default(
+    q_vals: list[Any] | tuple[Any, ...],
+    k_vals: list[Any] | tuple[Any, ...],
+    t_vals: list[Any] | tuple[Any, ...],
+    vis_vals: list[bool] | None = None,
+) -> list[dict[str, str]]:
+    """Collect form items or return the default example schema when empty."""
+    items = collect_form_items(q_vals, k_vals, t_vals, vis_vals)
+    return items if items else list(DEFAULT_EXAMPLE_SCHEMA)
 
 
 def apply_items_to_form_updates(
@@ -472,15 +484,7 @@ def apply_items_to_form_updates(
             t_updates.append(gr.update(value="string"))
 
     json_str = json.dumps(
-        items
-        if items
-        else [
-            {
-                "key": "example_field",
-                "description": "Describe what you want to extract from the document",
-                "type": "string",
-            }
-        ],
+        items if items else DEFAULT_EXAMPLE_SCHEMA,
         indent=2,
         ensure_ascii=False,
     )
@@ -626,6 +630,14 @@ def make_status_html(message: str, is_success: bool = False, is_loading: bool = 
     """
 
 
+def _format_completion_status(found: int, total: int, total_time_ms: float) -> str:
+    """Format extraction completion status message with elapsed time."""
+    time_s = f"{total_time_ms / 1000:.2f} s"
+    return (
+        f"Extraction complete: {found} of {total} items found in {time_s} ({total_time_ms:.0f} ms)."
+    )
+
+
 async def _async_perform_extraction_ui(
     files: Any,
     session_chunks: list[Any] | None,
@@ -668,15 +680,25 @@ async def _async_perform_extraction_ui(
     from docneedle.ingest.service import IngestionService
     from docneedle.retrieval.store import SessionVectorStore
 
-    queries: list[ExtractionItemQuery] = []
     use_raw = active_tab == "raw"
+    q_vals, k_vals, t_vals = unpack_field_args(field_args)
+    form_queries = [
+        ExtractionItemQuery(key=it["key"], description=it["description"], type=it["type"])
+        for it in collect_form_items(q_vals, k_vals, t_vals, vis)
+    ]
 
-    # If raw mode is active, parse queries from raw_json
-    if use_raw and raw_json and raw_json.strip():
+    raw_queries: list[ExtractionItemQuery] = []
+    if raw_json and raw_json.strip():
         try:
             parsed_items = parse_raw_json_schema(raw_json)
+            default_ex = DEFAULT_EXAMPLE_SCHEMA[0]
             for it in parsed_items:
-                queries.append(
+                if (
+                    it["key"] == default_ex["key"]
+                    and it["description"] == default_ex["description"]
+                ):
+                    continue
+                raw_queries.append(
                     ExtractionItemQuery(
                         key=it["key"],
                         description=it["description"],
@@ -684,38 +706,16 @@ async def _async_perform_extraction_ui(
                     )
                 )
         except Exception as e:
-            err = {"error": f"Invalid JSON schema: {e}"}
-            return (
-                render_results_html(err),
-                err,
-                list(session_chunks) if session_chunks else [],
-                make_status_html(f"Schema Error: {e}", is_success=False),
-            )
-
-    # Otherwise (or if raw mode was empty), collect from form builder fields
-    if not queries:
-        num_fields = MAX_FIELDS
-        q_vals = field_args[0:num_fields]
-        k_vals = field_args[num_fields : 2 * num_fields]
-        t_vals = field_args[2 * num_fields : 3 * num_fields]
-
-        for i in range(num_fields):
-            if i < len(vis) and not vis[i]:
-                continue
-            q = str(q_vals[i]).strip() if i < len(q_vals) and q_vals[i] else ""
-            k = str(k_vals[i]).strip() if i < len(k_vals) and k_vals[i] else ""
-            t = str(t_vals[i]).strip().lower() if i < len(t_vals) and t_vals[i] else "string"
-            if q or k:
-                key_name = k or q or f"item_{len(queries) + 1}"
-                desc = q or k
-                resolved_type = TYPE_MAP.get(t, t) if t not in ("none", "n/a", "") else "string"
-                queries.append(
-                    ExtractionItemQuery(
-                        key=key_name,
-                        description=desc,
-                        type=resolved_type,
-                    )
+            if use_raw:
+                err = {"error": f"Invalid JSON schema: {e}"}
+                return (
+                    render_results_html(err),
+                    err,
+                    list(session_chunks) if session_chunks else [],
+                    make_status_html(f"Schema Error: {e}", is_success=False),
                 )
+
+    queries = raw_queries if (use_raw and raw_queries) else (form_queries or raw_queries)
 
     if not queries:
         err = {"error": "Please define at least one field to extract via Form Builder or Raw JSON."}
@@ -770,11 +770,10 @@ async def _async_perform_extraction_ui(
         resp_dict = response.model_dump()
         total_time_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
         resp_dict["processing_time_ms"] = total_time_ms
-        time_s = f"{total_time_ms / 1000:.2f} s"
-        status_msg = (
-            f"Extraction complete: {resp_dict.get('found_items', 0)} of "
-            f"{resp_dict.get('total_items', 0)} items found in "
-            f"{time_s} ({total_time_ms:.0f} ms)."
+        status_msg = _format_completion_status(
+            resp_dict.get("found_items", 0),
+            resp_dict.get("total_items", 0),
+            total_time_ms,
         )
 
         return (
@@ -807,7 +806,23 @@ async def _async_perform_extraction_ui(
                 pass
 
 
-@gpu_decorator(duration=120)
+def _estimate_extraction_duration(
+    files: Any = None,
+    session_chunks: list[Any] | None = None,
+    *args: Any,
+    **kwargs: Any,
+) -> int:
+    """Dynamically estimate ZeroGPU reservation duration based on uploaded files and cache."""
+    if session_chunks:
+        return 60
+    file_list = files if isinstance(files, list) else ([files] if files else [])
+    num_files = len(file_list)
+    if num_files <= 1:
+        return 90
+    return min(180, 60 + num_files * 30)
+
+
+@gpu_decorator(duration=_estimate_extraction_duration)
 def perform_extraction_ui(
     files: Any,
     session_chunks: list[Any] | None,
@@ -840,13 +855,10 @@ def perform_extraction_ui(
     if isinstance(resp_dict, dict) and "results" in resp_dict:
         resp_dict["processing_time_ms"] = total_time_ms
         results_html = render_results_html(resp_dict)
-        time_s = f"{total_time_ms / 1000:.2f} s"
-        found = resp_dict.get("found_items", 0)
-        total = resp_dict.get("total_items", 0)
-        status_msg = (
-            f"Extraction complete: {found} of "
-            f"{total} items found in "
-            f"{time_s} ({total_time_ms:.0f} ms)."
+        status_msg = _format_completion_status(
+            resp_dict.get("found_items", 0),
+            resp_dict.get("total_items", 0),
+            total_time_ms,
         )
         status_html = make_status_html(status_msg, is_success=True)
 
@@ -858,6 +870,7 @@ def check_system_health() -> dict[str, Any]:
         "status": "healthy",
         "app_name": settings.app_name,
         "ocr_model": settings.ocr_model_name,
+        "ocr_use_cuda": settings.ocr_use_cuda,
         "llm_model": settings.llm_model_name,
         "embedding_model": settings.embedding_model,
         "reranker_model": settings.reranker_model,
@@ -1026,7 +1039,9 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
             with gr.Accordion("⚙️ System Health & API Info", open=False):
                 health_btn = gr.Button("Check System Health", size="sm")
                 health_json = gr.JSON(label="System Details")
-                health_btn.click(check_system_health, outputs=health_json, api_name=False, queue=False)
+                health_btn.click(
+                    check_system_health, outputs=health_json, api_name=False, queue=False
+                )
                 gr.Markdown(
                     """
                     * **Swagger API Documentation:** [/docs](/docs)
@@ -1036,8 +1051,15 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
                 )
 
     # Event handlers for dynamic schema builder (all internal UI events with api_name=False)
-    def on_add_field(vis: list[bool]) -> list[Any]:
+    def on_add_field(vis: list[bool], *field_args: Any) -> list[Any]:
         new_vis = list(vis)
+        q_vals = field_args[0:MAX_FIELDS]
+        k_vals = field_args[MAX_FIELDS : 2 * MAX_FIELDS]
+        for idx in range(len(new_vis)):
+            q = str(q_vals[idx]).strip() if idx < len(q_vals) and q_vals[idx] else ""
+            k = str(k_vals[idx]).strip() if idx < len(k_vals) and k_vals[idx] else ""
+            if q or k:
+                new_vis[idx] = True
         for idx in range(len(new_vis)):
             if not new_vis[idx]:
                 new_vis[idx] = True
@@ -1046,7 +1068,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
 
     add_field_btn.click(
         on_add_field,
-        inputs=[vis_state],
+        inputs=[vis_state] + q_inputs + k_inputs,
         outputs=[vis_state] + field_groups,
         api_name=False,
         queue=False,
@@ -1076,28 +1098,8 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         )
 
     def on_clear_all() -> list[Any]:
-        new_vis = [True] + [False] * (MAX_FIELDS - 1)
-        updates: list[Any] = [new_vis]
-        for i in range(MAX_FIELDS):
-            updates.append(gr.update(visible=(i == 0)))
-        for i in range(MAX_FIELDS):
-            updates.append(gr.update(value=""))
-        for i in range(MAX_FIELDS):
-            updates.append(gr.update(value=""))
-        for i in range(MAX_FIELDS):
-            updates.append(gr.update(value="string"))
-        empty_json = json.dumps(
-            [
-                {
-                    "key": "example_field",
-                    "description": "Describe what you want to extract from the document",
-                    "type": "string",
-                }
-            ],
-            indent=2,
-        )
-        updates.append(empty_json)
-        return updates
+        new_vis, grp_ups, q_ups, k_ups, t_ups, empty_json = apply_items_to_form_updates([])
+        return [new_vis] + grp_ups + q_ups + k_ups + t_ups + [empty_json]
 
     clear_all_btn.click(
         on_clear_all,
@@ -1107,10 +1109,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
     )
 
     def on_sync_form_to_raw(vis: list[bool], *field_args: Any) -> str:
-        num_fields = MAX_FIELDS
-        q_vals = field_args[0:num_fields]
-        k_vals = field_args[num_fields : 2 * num_fields]
-        t_vals = field_args[2 * num_fields : 3 * num_fields]
+        q_vals, k_vals, t_vals = unpack_field_args(field_args)
         return serialize_form_to_json(q_vals, k_vals, t_vals, vis)
 
     sync_form_to_raw_btn.click(
@@ -1181,35 +1180,8 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
                 items = []
 
         if not items:
-            num_fields = MAX_FIELDS
-            q_vals = field_args[0:num_fields]
-            k_vals = field_args[num_fields : 2 * num_fields]
-            t_vals = field_args[2 * num_fields : 3 * num_fields]
-            for i in range(num_fields):
-                if i < len(vis) and not vis[i]:
-                    continue
-                q = str(q_vals[i]).strip() if i < len(q_vals) and q_vals[i] else ""
-                k = str(k_vals[i]).strip() if i < len(k_vals) and k_vals[i] else ""
-                t = str(t_vals[i]).strip().lower() if i < len(t_vals) and t_vals[i] else "string"
-                if q or k:
-                    items.append(
-                        {
-                            "key": k or q or f"item_{len(items) + 1}",
-                            "description": q or k,
-                            "type": TYPE_MAP.get(t, t)
-                            if t not in ("none", "n/a", "")
-                            else "string",
-                        }
-                    )
-
-        if not items:
-            items = [
-                {
-                    "key": "example_field",
-                    "description": "Describe what you want to extract from the document",
-                    "type": "string",
-                }
-            ]
+            q_vals, k_vals, t_vals = unpack_field_args(field_args)
+            items = collect_form_to_items_or_default(q_vals, k_vals, t_vals, vis)
 
         tmp = tempfile.NamedTemporaryFile(
             mode="w",
@@ -1233,10 +1205,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
     tab_form_input.select(lambda: "form", outputs=[active_tab_state], api_name=False, queue=False)
 
     def on_select_raw_tab(vis: list[bool], *field_args: Any) -> tuple[str, str]:
-        num_fields = MAX_FIELDS
-        q_vals = field_args[0:num_fields]
-        k_vals = field_args[num_fields : 2 * num_fields]
-        t_vals = field_args[2 * num_fields : 3 * num_fields]
+        q_vals, k_vals, t_vals = unpack_field_args(field_args)
         json_str = serialize_form_to_json(q_vals, k_vals, t_vals, vis)
         return "raw", json_str
 
@@ -1336,16 +1305,24 @@ gradio_app.include_router(jobs_router)
 gradio_app.add_api_route("/healthz", health_check, methods=["GET"])
 gradio_app.add_api_route("/health", health_check, methods=["GET"])
 
-# Mount Gradio dashboard onto root path for external ASGI runners (e.g. uvicorn app:app)
-app = gr.mount_gradio_app(gradio_app, demo, path="/")
-
 if __name__ == "__main__":
+    app = gradio_app
     port = int(os.environ.get("PORT", 7860))
     logger.info(f"--> [STARTUP] Starting DocNeedle on 0.0.0.0:{port}...")
     demo.launch(
         _app=gradio_app,
         server_name="0.0.0.0",
         server_port=port,
+        footer_links=[],
+        css=CUSTOM_CSS,
+        ssr_mode=False,
+    )
+else:
+    # Mount Gradio dashboard onto root path for external ASGI runners (e.g. uvicorn app:app)
+    app = gr.mount_gradio_app(
+        gradio_app,
+        demo,
+        path="/",
         footer_links=[],
         css=CUSTOM_CSS,
         ssr_mode=False,

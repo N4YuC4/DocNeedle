@@ -34,6 +34,11 @@ model_flash_attn = true
 
 [ocr]
 enabled = true
+use_cuda = true
+gpu_device_id = 0
+rec_batch_num = 16
+cuda_conv_algo_search = "HEURISTIC"
+cuda_arena_extend_strategy = "kSameAsRequested"
 model_name = "RapidOCR (PP-OCRv6 Hybrid Det-Small / Rec-Small ONNX)"
 det_model_type = "small"
 rec_model_type = "small"
@@ -42,7 +47,6 @@ longest_edge = 1200
 det_limit_side_len = 960
 det_box_thresh = 0.4
 det_unclip_ratio = 1.8
-max_ocr_pages = 5
 pdf_render_scale = 1.5
 pdf_embedded_text_min_chars = 50
 pdf_embedded_text_max_check_pages = 5
@@ -89,10 +93,12 @@ max_tokens = 2048
 single_field_max_tokens = 128
 thinking_max_tokens = 512
 enable_thinking = false
-stop_tokens = ["</s>", "[/INST]", "[INST]", "<turn|>", "<end_of_turn>", "<|turn>"]
+log_extraction_payloads = false
+stop_tokens = ["</s>", "<turn|>", "<end_of_turn>", "<|turn>", "<|im_end|>", "<|eot_id|>"]
 # Prompt lookup speculative decoding for fast in-process token generation
 speculative_enabled = true
 speculative_cpu_enabled = false
+speculative_max_vocab_size = 65536
 speculative_num_pred_tokens = 5
 speculative_max_ngram_size = 2
 

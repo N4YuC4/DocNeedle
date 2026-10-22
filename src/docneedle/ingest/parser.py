@@ -115,6 +115,24 @@ def _pdf_has_embedded_text(
         return False
 
 
+_PAGE_HEADING_LINE_RE = re.compile(r"^##\s+Sayfa\s+\d+\s*$")
+
+
+def _format_clean_lines(text: str) -> str:
+    """Strip blank lines and join non-empty lines with double newlines for markdown blocks."""
+    return "\n\n".join(ln.strip() for ln in text.splitlines() if ln.strip())
+
+
+def _extract_markdown_body(md_text: str) -> str:
+    """Return markdown body text excluding top-level document title and page headings."""
+    body_lines = [
+        ln
+        for ln in md_text.splitlines()
+        if not ln.startswith("# ") and not _PAGE_HEADING_LINE_RE.match(ln)
+    ]
+    return "\n".join(body_lines).strip()
+
+
 def _markdown_to_docling_document(
     markdown_content: str,
     title: str,
@@ -208,8 +226,6 @@ class DoclingParser:
         title = doc_title or path_obj.stem
         pdf = pypdfium2.PdfDocument(path_obj)
         local_ocr_engine: Any = None
-        ocr_pages_count = 0
-        max_ocr_p = settings.max_ocr_pages
         try:
             md_parts = [f"# {title}\n"]
             for i in range(len(pdf)):
@@ -227,27 +243,23 @@ class DoclingParser:
                         )
                         and self.ocr_enabled
                     ):
-                        can_ocr = max_ocr_p <= 0 or ocr_pages_count < max_ocr_p
-                        if can_ocr:
-                            logger.info(
-                                "--> [OCR Fallback] Page %d/%d of '%s' has unreadable text; OCR...",
-                                i + 1,
-                                len(pdf),
-                                title,
-                            )
-                            engine = self._active_ocr_engine
-                            if engine is None:
-                                if local_ocr_engine is None:
-                                    local_ocr_engine = EphemeralRapidOCREngine().__enter__()
-                                engine = local_ocr_engine
-                            ocr_text = self._ocr_single_pdf_page(page, engine)
-                            ocr_pages_count += 1
-                            if ocr_text:
-                                text = ocr_text
+                        logger.info(
+                            "--> [OCR Fallback] Page %d/%d of '%s' has unreadable text; OCR...",
+                            i + 1,
+                            len(pdf),
+                            title,
+                        )
+                        engine = self._active_ocr_engine
+                        if engine is None:
+                            if local_ocr_engine is None:
+                                local_ocr_engine = EphemeralRapidOCREngine().__enter__()
+                            engine = local_ocr_engine
+                        ocr_text = self._ocr_single_pdf_page(page, engine)
+                        if ocr_text:
+                            text = ocr_text
 
                     if text:
-                        clean_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-                        page_content = "\n\n".join(clean_lines)
+                        page_content = _format_clean_lines(text)
                         md_parts.append(f"## Sayfa {i + 1}\n\n{page_content}\n")
                 finally:
                     page.close()
@@ -269,29 +281,23 @@ class DoclingParser:
         pdf = pypdfium2.PdfDocument(path_obj)
         try:
             total_pages = len(pdf)
-            max_p = settings.max_ocr_pages
-            pages_to_ocr = min(total_pages, max_p) if max_p > 0 else total_pages
             logger.info(
-                "PDF '%s' is scanned (%d pages). Processing first %d pages with RapidOCR...",
+                "PDF '%s' is scanned (%d pages). Processing all pages with RapidOCR...",
                 title,
                 total_pages,
-                pages_to_ocr,
             )
 
             md_parts = [f"# {title}\n"]
             with self._acquire_ocr_engine() as engine:
-                for page_idx in range(pages_to_ocr):
+                for page_idx in range(total_pages):
                     logger.info(
-                        f"--> [OCR] Processing page {page_idx + 1}/{pages_to_ocr} of '{title}'..."
+                        f"--> [OCR] Processing page {page_idx + 1}/{total_pages} of '{title}'..."
                     )
                     page = pdf[page_idx]
                     try:
                         page_text = self._ocr_single_pdf_page(page, engine)
                         if page_text:
-                            clean_lines = [
-                                ln.strip() for ln in page_text.splitlines() if ln.strip()
-                            ]
-                            page_content = "\n\n".join(clean_lines)
+                            page_content = _format_clean_lines(page_text)
                             md_parts.append(f"## Sayfa {page_idx + 1}\n\n{page_content}\n")
                     finally:
                         page.close()
@@ -314,8 +320,7 @@ class DoclingParser:
         with self._acquire_ocr_engine() as engine:
             page_text = engine.transcribe_image(rgb_img)
 
-        clean_lines = [ln.strip() for ln in page_text.splitlines() if ln.strip()]
-        page_content = "\n\n".join(clean_lines)
+        page_content = _format_clean_lines(page_text)
         full_md = f"# {title}\n\n{page_content}\n"
         return _markdown_to_docling_document(
             markdown_content=full_md,
@@ -430,13 +435,7 @@ class DoclingParser:
             else:
                 logger.info(f"PDF '{filename}' contains digital text; using fast parser.")
                 doc = self._parse_digital_pdf(path_obj, doc_title=doc_title)
-                md_text = doc.export_to_markdown().strip()
-                body_lines = [
-                    ln
-                    for ln in md_text.splitlines()
-                    if not ln.startswith("# ") and not re.match(r"^##\s+Sayfa\s+\d+\s*$", ln)
-                ]
-                body_text = "\n".join(body_lines).strip()
+                body_text = _extract_markdown_body(doc.export_to_markdown().strip())
                 md_len = len(body_text)
                 if (
                     md_len < settings.ocr_fallback_min_chars

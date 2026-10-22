@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -46,7 +47,7 @@ class JobManager:
 
     def __init__(self) -> None:
         self._jobs: dict[str, JobRecord] = {}
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
     def create_job(self, total_items: int) -> str:
         """Register a new job in PENDING state."""
@@ -62,31 +63,33 @@ class JobManager:
                 percent=0.0,
             ),
         )
-        self._jobs[job_id] = record
+        with self._lock:
+            self._jobs[job_id] = record
         return job_id
 
     def get_job(self, job_id: str) -> JobStatusResponse | None:
         """Return the current public state of a job, or None if not found/expired."""
         self.cleanup_expired_jobs()
-        record = self._jobs.get(job_id)
-        if not record:
-            return None
+        with self._lock:
+            record = self._jobs.get(job_id)
+            if not record:
+                return None
 
-        proc_ms = None
-        if record.completed_at and record.created_at:
-            proc_ms = round((record.completed_at - record.created_at) * 1000.0, 2)
+            proc_ms = None
+            if record.completed_at and record.created_at:
+                proc_ms = round((record.completed_at - record.created_at) * 1000.0, 2)
 
-        return JobStatusResponse(
-            job_id=record.job_id,
-            status=record.status,
-            progress=record.progress,
-            created_at=record.created_at,
-            completed_at=record.completed_at,
-            processing_time_ms=proc_ms,
-            results=list(record.results),
-            response=record.response,
-            error=record.error,
-        )
+            return JobStatusResponse(
+                job_id=record.job_id,
+                status=record.status,
+                progress=record.progress.model_copy(),
+                created_at=record.created_at,
+                completed_at=record.completed_at,
+                processing_time_ms=proc_ms,
+                results=list(record.results),
+                response=record.response,
+                error=record.error,
+            )
 
     async def subscribe(self, job_id: str) -> asyncio.Queue | None:
         """Subscribe to real-time events for an active job."""
@@ -212,12 +215,13 @@ class JobManager:
         """Evict jobs that have exceeded the retention TTL from RAM."""
         ttl_seconds = settings.job_retention_minutes * 60
         now = time.time()
-        expired_ids = [
-            jid for jid, rec in self._jobs.items() if (now - rec.created_at) > ttl_seconds
-        ]
-        for jid in expired_ids:
-            logger.info(f"[JOB CLEANUP] Evicting expired job from RAM: {jid}")
-            del self._jobs[jid]
+        with self._lock:
+            expired_ids = [
+                jid for jid, rec in self._jobs.items() if (now - rec.created_at) > ttl_seconds
+            ]
+            for jid in expired_ids:
+                logger.info(f"[JOB CLEANUP] Evicting expired job from RAM: {jid}")
+                del self._jobs[jid]
 
     async def run_extraction_worker(
         self,

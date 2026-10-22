@@ -1,4 +1,4 @@
-"""Local in-process Gemma 4 E2B QAT engine for information extraction."""
+"""Local in-process GGUF LLM engine for information extraction."""
 
 import logging
 import re
@@ -17,19 +17,19 @@ TYPE_GUIDELINES: dict[str, dict[str, str]] = {
     },
     "number": {
         "description": "Numeric value",
-        "example": "42 or 1500",
+        "example": "1500",
     },
     "money": {
         "description": "Monetary amount and currency",
-        "example": "$25,000 or 1,500 USD or 25.000 TL",
+        "example": "25.000 TL",
     },
     "date": {
         "description": "Date information (day, month, year)",
-        "example": "June 15, 2026 or 15.05.1992",
+        "example": "15.05.1992",
     },
     "time": {
         "description": "Time of day",
-        "example": "14:30 or 09:00 AM",
+        "example": "14:30",
     },
     "email": {
         "description": "Email address",
@@ -37,7 +37,7 @@ TYPE_GUIDELINES: dict[str, dict[str, str]] = {
     },
     "phone": {
         "description": "Phone number",
-        "example": "+1 555 123 4567 or 0532 123 45 67",
+        "example": "+90 532 123 45 67",
     },
     "id": {
         "description": "ID number, tax ID, registration or passport number",
@@ -49,7 +49,7 @@ TYPE_GUIDELINES: dict[str, dict[str, str]] = {
     },
     "percentage": {
         "description": "Percentage rate",
-        "example": "18% or 20.5%",
+        "example": "18%",
     },
     "person": {
         "description": "Full name of a person",
@@ -65,7 +65,7 @@ TYPE_GUIDELINES: dict[str, dict[str, str]] = {
     },
     "boolean": {
         "description": "Yes/No or True/False confirmation status",
-        "example": "Yes or No",
+        "example": "Yes",
     },
     "list": {
         "description": "Comma-separated or bulleted list",
@@ -73,7 +73,7 @@ TYPE_GUIDELINES: dict[str, dict[str, str]] = {
     },
 }
 
-BASE_RULES = (
+CORE_RULES = (
     "You are a rigorous official document analysis assistant answering questions "
     "based strictly on the provided document excerpts.\n"
     "Rules:\n"
@@ -87,22 +87,16 @@ BASE_RULES = (
     "'address', 'ID number'), extract the primary, definitive value belonging to the subject "
     "of the document, rather than incidental third parties in tables or bank/corporate "
     "headquarters addresses.\n"
-    "4. Domain specifics:\n"
-    "   - In rental contracts, 'Kira Bedeli' represents the agreed rent / monthly rent "
-    "('aylık kira bedeli'). Extract this stated amount directly (e.g., '25.000 TL').\n"
-    "   - For first name ('ad' / 'isim'), extract ONLY the given first name "
-    "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', first name is 'TOLGA').\n"
-    "   - For surname ('soyad' / 'soyisim'), extract ONLY the family surname "
-    "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', surname is 'ARSLAN').\n"
-    "   - NEVER concatenate adjacent column values, parent names ('baba adı', 'ana adı'), "
-    "gender, dates, or locations into the person's name.\n"
+)
+
+NOT_FOUND_RULE = (
     "5. If the requested information is not present in the document at all, "
     'reply strictly with "Not found".\n'
 )
 
 THINKING_RULE = (
-    "6. Keep your reasoning inside <think>...</think> concise (1-3 sentences). "
-    "Then immediately close with </think> and output ONLY the final extracted value "
+    "6. Keep your reasoning concise (1-3 sentences). "
+    "Then immediately close the reasoning block and output ONLY the final extracted value "
     "(or 'Not found') directly without markdown headers, prefixes (such as '**Final Answer:**', "
     "'**Output:**'), or filler.\n"
 )
@@ -112,6 +106,15 @@ NON_THINKING_RULE = (
     "filler. Output strictly and ONLY the final extracted value (or 'Not found') directly.\n"
 )
 
+
+def _get_base_rules() -> str:
+    domain = settings.llm_domain_rules.strip()
+    if domain:
+        return f"{CORE_RULES}{domain}\n{NOT_FOUND_RULE}"
+    return f"{CORE_RULES}{NOT_FOUND_RULE}"
+
+
+BASE_RULES = _get_base_rules()
 SYSTEM_PROMPT = BASE_RULES + THINKING_RULE
 
 _NOT_FOUND_TERMS = {
@@ -125,7 +128,18 @@ _NOT_FOUND_TERMS = {
     "yok",
     "yoktur",
 }
+_BOOLEAN_VALID_NEGATIVES = {"false", "yok", "yoktur", "none"}
+_NOT_FOUND_SUFFIX_PATTERN = re.compile(
+    r"(?:^|\b)(?:"
+    + "|".join(re.escape(term) for term in sorted(_NOT_FOUND_TERMS, key=len, reverse=True))
+    + r")$",
+    re.IGNORECASE,
+)
 
+_THOUGHT_OPEN_PATTERN = re.compile(
+    r"^(?:<\|channel>thought|<think>|<thought>|\[THINK\])\s*",
+    re.IGNORECASE,
+)
 _THOUGHT_CLOSE_PATTERN = re.compile(
     r"(?:<channel\|>|<\|channel\|>|<\|channel>text|</channel>|"
     r"</thought>|</think>|<channel>|\[END OF THOUGHT\]|\[/THINK\])",
@@ -133,15 +147,20 @@ _THOUGHT_CLOSE_PATTERN = re.compile(
 )
 _CONTROL_TOKENS_PATTERN = re.compile(
     r"(?:<\|turn>|<turn\|>|<\|channel>(?:text|thought)?|<channel\|>|<\|channel\|>|</channel>|"
-    r"</thought>|</think>|<end_of_turn>|\[SYSTEM_PROMPT\]|\[/SYSTEM_PROMPT\]|\[INST\]|\[/INST\]|"
-    r"\[THINK\]|\[/THINK\]|<s>|</s>)",
+    r"</thought>|</think>|<end_of_turn>|<\|im_start\|>|<\|im_end\|>|<\|eot_id\|>|"
+    r"\[SYSTEM_PROMPT\]|\[/SYSTEM_PROMPT\]|\[INST\]|\[/INST\]|"
+    r"\[THINK\]|\[/THINK\]|<s>|</s>|<bos>|<eos>)",
     re.IGNORECASE,
 )
 _ANSWER_PREFIX_PATTERN = re.compile(
-    r"^(?:<\|channel>(?:text)?\s*)?(?:Answer|Cevap|Result|Sonuç(?:\s+olarak)?|Value|Değer|Final\s+Answer|Nihai\s+Cevap):\s*",
+    r"^(?:<\|channel>(?:text)?\s*)?(?:[-*]\s*)?(?:\*{1,2})?"
+    r"(?:Answer|Cevap|Result|Sonuç(?:\s+olarak)?|Value|Değer|Output|Çıktı|"
+    r"Final\s+Answer|Nihai\s+Cevap):(?:\*{1,2})?\s*",
     re.IGNORECASE,
 )
 _CODE_BLOCK_PATTERN = re.compile(r"^```[a-zA-Z]*\n?|```$", re.MULTILINE)
+_HORIZONTAL_RULE_START_PATTERN = re.compile(r"^(?:---|\*\*\*|___)\s*")
+_HORIZONTAL_RULE_END_PATTERN = re.compile(r"\s*(?:---|\*\*\*|___)$")
 
 
 class LLMExtractionResult(TypedDict):
@@ -152,9 +171,23 @@ class LLMExtractionResult(TypedDict):
     thinking: str | None
 
 
-def _is_mistral_model() -> bool:
-    name = getattr(settings, "llm_model_name", "").lower()
-    return "ministral" in name or "mistral" in name
+def _render_template_messages(
+    chat_formatter: Any,
+    system_prompt: str,
+    user_content: str,
+    enable_thinking: bool,
+    bos_token: str = "",
+) -> str:
+    """Render system and user messages using the GGUF chat template formatter."""
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    res = chat_formatter(messages=messages, enable_thinking=enable_thinking)
+    prompt = str(res.prompt)
+    if bos_token and prompt.startswith(bos_token):
+        prompt = prompt[len(bos_token) :]
+    return prompt
 
 
 def _build_extraction_prompt(
@@ -164,8 +197,10 @@ def _build_extraction_prompt(
     max_tokens: int | None = None,
     llm: Any = None,
     enable_thinking: bool | None = None,
+    chat_formatter: Any = None,
+    thought_open_tag: str = "<|channel>thought\n",
 ) -> str:
-    """Construct prompt adhering to Ministral/Mistral or Gemma turn templates."""
+    """Construct extraction prompt dynamically via model chat template or universal turn format."""
     type_prompt = ""
     if expected_type and expected_type.lower() in TYPE_GUIDELINES:
         guide = TYPE_GUIDELINES[expected_type.lower()]
@@ -175,37 +210,52 @@ def _build_extraction_prompt(
         )
 
     use_thinking = settings.llm_enable_thinking if enable_thinking is None else enable_thinking
-    active_sys_prompt = BASE_RULES + (THINKING_RULE if use_thinking else NON_THINKING_RULE)
+    active_sys_prompt = _get_base_rules() + (THINKING_RULE if use_thinking else NON_THINKING_RULE)
 
-    if _is_mistral_model():
-        header = f'[SYSTEM_PROMPT]{active_sys_prompt}[/SYSTEM_PROMPT][INST]Document Context:\n"""\n'
-        footer = f'\n"""\n\nQuestion / Target Field: {query}{type_prompt}\n[/INST]'
-        turn_close = "<think>\n" if use_thinking else ""
+    user_header = 'Document Context:\n"""\n'
+    user_footer = f'\n"""\n\nQuestion / Target Field: {query}{type_prompt}'
+
+    if chat_formatter is not None:
+        sentinel = "\x00__DOCNEEDLE_CTX__\x00"
+        rendered = _render_template_messages(
+            chat_formatter=chat_formatter,
+            system_prompt=active_sys_prompt,
+            user_content=f"{user_header}{sentinel}{user_footer}",
+            enable_thinking=use_thinking,
+        )
+        header, _, tail = rendered.partition(sentinel)
+        footer = tail
+        turn_close = ""
+        if use_thinking and thought_open_tag and not tail.endswith(thought_open_tag):
+            turn_close = thought_open_tag
     else:
-        header = f'<|turn>system\n{active_sys_prompt}<turn|>\n<|turn>user\nDocument Context:\n"""\n'
-        footer = f'\n"""\n\nQuestion / Target Field: {query}{type_prompt}'
+        header = f"<|turn>system\n{active_sys_prompt}<turn|>\n<|turn>user\n{user_header}"
+        footer = user_footer
         turn_close = (
-            "<turn|>\n<|turn>model\n<|channel>thought\n"
+            f"<turn|>\n<|turn>model\n{thought_open_tag}"
             if use_thinking
             else "<turn|>\n<|turn>model\n"
         )
 
     if llm is not None and max_tokens is not None:
-        try:
-            head_tokens = llm.tokenize(header.encode("utf-8"))
-            foot_tokens = llm.tokenize((footer + turn_close).encode("utf-8"))
-            avail_ctx_budget = max_tokens - len(head_tokens) - len(foot_tokens)
-            if avail_ctx_budget > 64:
-                ctx_tokens = llm.tokenize(context.encode("utf-8"))
-                if len(ctx_tokens) > avail_ctx_budget:
-                    logger.warning(
-                        f"Document context tokens ({len(ctx_tokens)}) exceed budget "
-                        f"({avail_ctx_budget}). Truncating lowest-priority context chunks."
-                    )
-                    safe_ctx_tokens = ctx_tokens[:avail_ctx_budget]
-                    context = llm.detokenize(safe_ctx_tokens).decode("utf-8", errors="ignore")
-        except Exception as e:
-            logger.debug(f"Prompt context token budget calculation bypassed: {e}")
+        head_tokens = llm.tokenize(header.encode("utf-8"))
+        foot_tokens = llm.tokenize((footer + turn_close).encode("utf-8"))
+        avail_ctx_budget = max_tokens - len(head_tokens) - len(foot_tokens)
+        if avail_ctx_budget <= 0:
+            raise ValueError(
+                f"Prompt token budget ({max_tokens}) is too small for prompt wrapper "
+                f"({len(head_tokens) + len(foot_tokens)} tokens)."
+            )
+        ctx_tokens = llm.tokenize(context.encode("utf-8"))
+        if len(ctx_tokens) > avail_ctx_budget:
+            logger.warning(
+                "Document context tokens (%d) exceed budget (%d). "
+                "Truncating lowest-priority context chunks.",
+                len(ctx_tokens),
+                avail_ctx_budget,
+            )
+            safe_ctx_tokens = ctx_tokens[:avail_ctx_budget]
+            context = llm.detokenize(safe_ctx_tokens).decode("utf-8", errors="ignore")
 
     return f"{header}{context}{footer}{turn_close}"
 
@@ -225,26 +275,47 @@ def _extract_prefixed_answer(lines: list[str]) -> tuple[str | None, list[str]]:
     return None, lines
 
 
+def _strip_thought_open_tag(text: str, custom_open_tag: str | None = None) -> str:
+    cleaned = text.strip()
+    if custom_open_tag and custom_open_tag.strip():
+        cleaned = cleaned.replace(custom_open_tag.strip(), "")
+    cleaned = _THOUGHT_OPEN_PATTERN.sub("", cleaned.strip())
+    return cleaned.strip()
+
+
 def _parse_model_response(
     raw_text: str,
     started_in_thought: bool = False,
+    thought_open_tag: str | None = None,
+    thought_close_tag: str | None = None,
 ) -> tuple[str | None, str]:
     """Separate model thinking reasoning from final answer text."""
     text = raw_text.strip()
     thinking: str | None = None
     answer: str = text
 
-    match = _THOUGHT_CLOSE_PATTERN.search(text)
-    if match:
-        thinking_part = (
-            text[: match.start()].replace("<|channel>thought", "").replace("<think>", "").strip()
-        )
-        answer_part = text[match.end() :].strip()
+    close_match = None
+    if thought_close_tag and thought_close_tag.strip() and thought_close_tag.strip() in text:
+        tag = thought_close_tag.strip()
+        pos = text.find(tag)
+        close_span = (pos, pos + len(tag))
+    else:
+        close_match = _THOUGHT_CLOSE_PATTERN.search(text)
+        close_span = (close_match.start(), close_match.end()) if close_match else None
+
+    has_open_tag = bool(_THOUGHT_OPEN_PATTERN.match(text)) or (
+        bool(thought_open_tag and thought_open_tag.strip())
+        and text.startswith(thought_open_tag.strip())
+    )
+
+    if close_span is not None:
+        thinking_part = _strip_thought_open_tag(text[: close_span[0]], thought_open_tag)
+        answer_part = text[close_span[1] :].strip()
         thinking = thinking_part if thinking_part else None
         answer = answer_part
-    elif started_in_thought or text.startswith("<|channel>thought") or text.startswith("<think>"):
+    elif started_in_thought or has_open_tag:
         # Model generated inside thought channel but never reached or emitted a closing tag
-        cleaned_text = text.replace("<|channel>thought", "").replace("<think>", "").strip()
+        cleaned_text = _strip_thought_open_tag(text, thought_open_tag)
         lines = [line.strip() for line in cleaned_text.split("\n") if line.strip()]
         extracted_answer, extracted_thinking_lines = _extract_prefixed_answer(lines)
 
@@ -273,38 +344,24 @@ def _parse_model_response(
 
 def _sanitize_extracted_value(text: str) -> str:
     """Clean markdown code blocks, control tokens, prefixes, and formatting."""
-    cleaned = text.strip()
-    cleaned = _CONTROL_TOKENS_PATTERN.sub("", cleaned).strip()
-
-    # Strip markdown horizontal rules at start/end
-    cleaned = re.sub(r"^(?:---|\*\*\*|___)\s*", "", cleaned).strip()
-    cleaned = re.sub(r"\s*(?:---|\*\*\*|___)$", "", cleaned).strip()
-
-    # Strip markdown bold/italic wrapper on answer prefixes (e.g. **Answer:**, **Final Answer:**)
-    prefix_re = re.compile(
-        r"^(?:[-*]\s*)?(?:\*{1,2})?(?:Answer|Cevap|Result|Sonuç(?:\s+olarak)?|Value|Değer|Output|Çıktı|Final\s+Answer|Nihai\s+Cevap):(?:\*{1,2})?\s*",
-        re.IGNORECASE,
-    )
-    cleaned = prefix_re.sub("", cleaned).strip()
+    cleaned = _CONTROL_TOKENS_PATTERN.sub("", text.strip()).strip()
+    cleaned = _HORIZONTAL_RULE_START_PATTERN.sub("", cleaned).strip()
+    cleaned = _HORIZONTAL_RULE_END_PATTERN.sub("", cleaned).strip()
+    cleaned = _ANSWER_PREFIX_PATTERN.sub("", cleaned).strip()
 
     if cleaned.startswith("```"):
         cleaned = _CODE_BLOCK_PATTERN.sub("", cleaned).strip()
-
-    cleaned = prefix_re.sub("", cleaned).strip()
-    cleaned = _CONTROL_TOKENS_PATTERN.sub("", cleaned).strip()
+        cleaned = _ANSWER_PREFIX_PATTERN.sub("", cleaned).strip()
+        cleaned = _CONTROL_TOKENS_PATTERN.sub("", cleaned).strip()
 
     # If multi-line, check if there's a final answer line
     lines = [ln.strip() for ln in cleaned.split("\n") if ln.strip()]
     if len(lines) > 1:
-        for idx in range(len(lines) - 1, -1, -1):
-            line = lines[idx]
-            match = prefix_re.match(line)
-            if match:
-                cleaned = line[match.end() :].strip()
-                break
-        else:
-            if lines[0].startswith(("---", "#", "**Final")):
-                cleaned = lines[-1].strip()
+        extracted, _ = _extract_prefixed_answer(lines)
+        if extracted is not None:
+            cleaned = extracted
+        elif lines[0].startswith(("---", "#", "**Final")):
+            cleaned = lines[-1]
 
     # Strip surrounding markdown bold / italic formatting if applied to whole answer
     if (cleaned.startswith("**") and cleaned.endswith("**")) or (
@@ -319,49 +376,192 @@ def _is_not_found_value(text: str, expected_type: str | None = None) -> bool:
     norm = text.lower().strip("\"'., ")
     if not norm:
         return True
-    if expected_type and expected_type.lower() == "boolean" and norm == "false":
+    if expected_type and expected_type.lower() == "boolean" and norm in _BOOLEAN_VALID_NEGATIVES:
         return False
     if norm in _NOT_FOUND_TERMS:
         return True
-    for term in _NOT_FOUND_TERMS:
-        if norm.endswith(term):
-            return True
-    return False
+    return bool(_NOT_FOUND_SUFFIX_PATTERN.search(norm))
 
 
-def _log_extraction_trace(query_key: str, thinking: str | None, value: str) -> None:
-    """Log model extraction trace for debugging and audit."""
+def _log_extraction_trace(
+    query_key: str,
+    thinking: str | None,
+    value: str,
+    found: bool = True,
+) -> None:
+    """Log model extraction trace without leaking sensitive PII unless explicitly enabled."""
+    if not settings.llm_log_extraction_payloads:
+        logger.debug(
+            "LLM extraction finished for '%s' (found=%s, has_thinking=%s)",
+            query_key,
+            found,
+            bool(thinking),
+        )
+        return
+
     sep = "=" * 25
     if thinking:
-        logger.info(
-            f"\n{sep} [MODEL THINKING ({query_key})] {sep}\n{thinking.strip()}\n"
-            f"{sep} [MODEL ANSWER ({query_key})] {sep}\n{value.strip()}\n{'=' * 75}"
+        logger.debug(
+            "\n%s [MODEL THINKING (%s)] %s\n%s\n%s [MODEL ANSWER (%s)] %s\n%s\n%s",
+            sep,
+            query_key,
+            sep,
+            thinking.strip(),
+            sep,
+            query_key,
+            sep,
+            value.strip(),
+            "=" * 75,
         )
     else:
-        logger.info(f"\n{sep} [MODEL OUTPUT ({query_key})] {sep}\n{value.strip()}\n{'=' * 75}")
+        logger.debug(
+            "\n%s [MODEL OUTPUT (%s)] %s\n%s\n%s",
+            sep,
+            query_key,
+            sep,
+            value.strip(),
+            "=" * 75,
+        )
 
 
 def _resolve_default_model_path() -> Path:
-    """Find the configured GGUF model file in the model storage directory."""
+    """Resolve the configured GGUF model file strictly without silent fallbacks."""
     base = Path(settings.model_storage_dir) / "llm"
-    model_name = getattr(settings, "llm_model_name", "gemma-4-E2B-it-qat-UD-Q4_K_XL")
-    candidate = base / f"{model_name}.gguf"
-    if candidate.exists():
-        return candidate
-    if base.exists():
-        # First look for model file containing model_name substring
-        for f in base.glob("*.gguf"):
-            if not f.name.startswith("mtp") and model_name.lower() in f.name.lower():
-                return f
-        # Otherwise fallback to any valid GGUF
-        ggufs = [f for f in base.glob("*.gguf") if not f.name.startswith("mtp")]
-        if ggufs:
-            return ggufs[0]
+    model_name = settings.llm_model_name
+    filename = model_name if model_name.endswith(".gguf") else f"{model_name}.gguf"
+    candidate = base / filename
+    if not candidate.exists():
+        raise FileNotFoundError(f"Configured GGUF model '{model_name}' not found at: {candidate}")
     return candidate
 
 
-class LocalGemmaEngine:
-    """Manages in-process LLM (Ministral / Gemma) GGUF inference with thinking support."""
+def _probe_template_delimiters(
+    template_str: str,
+    bos_token: str,
+    eos_token: str,
+) -> tuple[Any, str, str]:
+    """Build chat formatter from GGUF template and dynamically inspect reasoning delimiters."""
+    from llama_cpp.llama_chat_format import Jinja2ChatFormatter
+
+    gen_formatter = Jinja2ChatFormatter(
+        template=template_str,
+        eos_token=eos_token,
+        bos_token="",
+        add_generation_prompt=True,
+    )
+    nogen_formatter = Jinja2ChatFormatter(
+        template=template_str,
+        eos_token=eos_token,
+        bos_token="",
+        add_generation_prompt=False,
+    )
+
+    think_open = "<|channel>thought\n"
+    think_close = "\n<channel|>\n"
+    try:
+        t_sentinel = "\x00__DOCNEEDLE_THINK__\x00"
+        a_sentinel = "\x00__DOCNEEDLE_ANSWER__\x00"
+        base_msgs = [
+            {"role": "system", "content": "S"},
+            {"role": "user", "content": "U"},
+        ]
+        prefix = gen_formatter(messages=base_msgs, enable_thinking=True).prompt
+        full = nogen_formatter(
+            messages=[
+                *base_msgs,
+                {
+                    "role": "assistant",
+                    "content": a_sentinel,
+                    "reasoning_content": t_sentinel,
+                },
+            ],
+            enable_thinking=True,
+        ).prompt
+        if t_sentinel in full and a_sentinel in full:
+            t_idx = full.index(t_sentinel)
+            a_idx = full.index(a_sentinel)
+            if full.startswith(prefix) and t_idx >= len(prefix):
+                derived_open = full[len(prefix) : t_idx]
+                if derived_open.strip():
+                    think_open = derived_open
+            derived_close = full[t_idx + len(t_sentinel) : a_idx]
+            if derived_close.strip():
+                think_close = derived_close
+    except Exception as err:
+        logger.debug("Using default reasoning tags during template inspection: %s", err)
+
+    return gen_formatter, think_open, think_close
+
+
+def _create_speculative_draft_model(model_path: Path, llama_cls: Any) -> Any:
+    """Inspect GGUF vocabulary size and build a Prompt Lookup Decoding draft model when eligible."""
+    use_speculative = settings.llm_speculative_enabled and (
+        settings.gpu_enabled or settings.llm_speculative_cpu_enabled
+    )
+    if not use_speculative:
+        return None
+
+    probe_llm = llama_cls(
+        model_path=str(model_path),
+        vocab_only=True,
+        verbose=False,
+    )
+    vocab_size = probe_llm.n_vocab()
+    del probe_llm
+
+    if vocab_size > settings.llm_speculative_max_vocab_size:
+        logger.info(
+            "Skipping speculative decoding because model vocab_size (%d) exceeds threshold (%d).",
+            vocab_size,
+            settings.llm_speculative_max_vocab_size,
+        )
+        return None
+
+    from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
+
+    num_pred = (
+        settings.llm_speculative_num_pred_tokens
+        if not settings.gpu_enabled
+        else max(10, settings.llm_speculative_num_pred_tokens)
+    )
+    logger.info(
+        "Prompt Lookup Decoding enabled: max_ngram_size=%d, num_pred_tokens=%d",
+        settings.llm_speculative_max_ngram_size,
+        num_pred,
+    )
+    return LlamaPromptLookupDecoding(
+        max_ngram_size=settings.llm_speculative_max_ngram_size,
+        num_pred_tokens=num_pred,
+    )
+
+
+def _decode_special_token(llm: Any, token_id: int) -> str:
+    """Decode a special token ID into its string representation if valid."""
+    if token_id < 0:
+        return ""
+    return llm.detokenize([token_id], special=True).decode("utf-8", errors="ignore")
+
+
+def _extract_llm_chat_template(llm: Any) -> tuple[Any, str, str]:
+    """Extract embedded chat template formatter and reasoning tags from loaded Llama instance."""
+    default_open = "<|channel>thought\n"
+    default_close = "\n<channel|>\n"
+    metadata = getattr(llm, "metadata", None) or {}
+    template_str = metadata.get("tokenizer.chat_template")
+    if not template_str:
+        return None, default_open, default_close
+
+    try:
+        bos_str = _decode_special_token(llm, llm.token_bos())
+        eos_str = _decode_special_token(llm, llm.token_eos())
+        return _probe_template_delimiters(template_str, bos_str, eos_str)
+    except Exception as tmpl_err:
+        logger.warning("Could not initialize GGUF Jinja2ChatFormatter: %s", tmpl_err)
+        return None, default_open, default_close
+
+
+class LocalLLMEngine:
+    """Manages model-agnostic in-process GGUF LLM inference with dynamic template inspection."""
 
     def __init__(self, model_path: str | Path | None = None) -> None:
         from docneedle.cuda_compat import preload_cuda_runtime_libs
@@ -370,59 +570,23 @@ class LocalGemmaEngine:
         from llama_cpp import Llama
 
         if model_path is None:
-            model_path = _resolve_default_model_path()
+            self.model_path = _resolve_default_model_path()
+        else:
+            self.model_path = Path(model_path)
+            if not self.model_path.exists():
+                raise FileNotFoundError(f"GGUF model file not found at: {self.model_path}")
 
-        self.model_path = Path(model_path)
-        if not self.model_path.exists():
-            raise FileNotFoundError(f"GGUF model file not found at: {self.model_path}")
+        logger.info("Loading local LLM (%s) from %s...", self.model_path.name, self.model_path)
 
-        logger.info(f"Loading local LLM ({self.model_path.name}) from {self.model_path}...")
-        draft_model = None
-        use_speculative = settings.llm_speculative_enabled and (
-            settings.gpu_enabled or getattr(settings, "llm_speculative_cpu_enabled", False)
-        )
-        # Prompt lookup decoding requires `logits_all=True`.
-        # On models with massive vocabularies (e.g. Gemma with 256k vocab), logits_all=True
-        # allocates 4.29 GB of RAM (n_tokens * 256k * 4 bytes).
-        # We only enable draft_model on standard vocabularies (<= 64k, e.g. Mistral)
-        # to prevent multi-gigabyte RAM/VRAM bloat.
-        if use_speculative and "gemma" in str(self.model_path).lower():
-            logger.info(
-                "Skipping speculative decoding for Gemma (vocab=256k) "
-            )
-            use_speculative = False
-
-        if use_speculative:
-            from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
-
-            num_pred = (
-                settings.llm_speculative_num_pred_tokens
-                if not settings.gpu_enabled
-                else max(10, settings.llm_speculative_num_pred_tokens)
-            )
-            draft_model = LlamaPromptLookupDecoding(
-                max_ngram_size=settings.llm_speculative_max_ngram_size,
-                num_pred_tokens=num_pred,
-            )
-            logger.info(
-                "Prompt Lookup Decoding enabled: max_ngram_size=%d, num_pred_tokens=%d",
-                settings.llm_speculative_max_ngram_size,
-                num_pred,
-            )
-
+        draft_model = _create_speculative_draft_model(self.model_path, Llama)
         logits_all = draft_model is not None
-
-        llm_ctx = settings.llm_n_ctx
-        if draft_model is not None and llm_ctx > 4096:
-            llm_ctx = 4096
-
-        self.n_ctx = llm_ctx
+        self.n_ctx = min(settings.llm_n_ctx, 4096) if logits_all else settings.llm_n_ctx
 
         self.llm = Llama(
             model_path=str(self.model_path),
             draft_model=draft_model,
             logits_all=logits_all,
-            n_ctx=llm_ctx,
+            n_ctx=self.n_ctx,
             n_gpu_layers=settings.effective_gpu_layers,
             n_threads=settings.cpu_threads,
             n_threads_batch=settings.cpu_threads_batch,
@@ -434,40 +598,62 @@ class LocalGemmaEngine:
             use_mlock=False,
             verbose=False,
         )
-        if not logits_all:
+        if not logits_all and hasattr(self.llm, "scores"):
             import numpy as np
 
             # When logits_all=False and logprobs=None, llama-cpp-python never writes to or reads
             # from self.scores (which otherwise pre-allocates n_batch * n_vocab * 4 bytes, ~536 MB).
             self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
+
+        (
+            self._chat_formatter,
+            self._thought_open_tag,
+            self._thought_close_tag,
+        ) = _extract_llm_chat_template(self.llm)
+
         self._lock = threading.Lock()
-        logger.info(f"Local LLM ({self.model_path.name}) loaded successfully (n_ctx={self.n_ctx}).")
+        logger.info(
+            "Local LLM (%s) loaded successfully (n_ctx=%d).", self.model_path.name, self.n_ctx
+        )
 
     def _attempt_continuation(self, prompt: str, thinking: str, query_key: str) -> str | None:
         """Execute a fast continuation turn when reasoning terminated without closing thought."""
         logger.info(
-            f"Model reasoning did not output closed answer for '{query_key}'. "
-            "Running fast continuation to extract final answer..."
+            "Model reasoning did not output closed answer for '%s'. "
+            "Running fast continuation to extract final answer...",
+            query_key,
         )
-        if _is_mistral_model():
-            continuation_prompt = f"{prompt}{thinking.strip()}\n</think>\n"
-        else:
-            continuation_prompt = f"{prompt}{thinking.strip()}\n<channel|>\n"
-        try:
-            with self._lock:
-                cont_res = self.llm(
-                    prompt=continuation_prompt,
-                    temperature=settings.llm_temperature,
-                    top_p=settings.llm_top_p,
-                    max_tokens=128,
-                    stop=settings.llm_stop_tokens,
+        close_sep = self._thought_close_tag
+        if not close_sep.endswith("\n"):
+            close_sep = f"{close_sep}\n"
+        continuation_prompt = f"{prompt}{thinking.strip()}{close_sep}"
+
+        with self._lock:
+            cont_tokens = self.llm.tokenize(continuation_prompt.encode("utf-8"))
+            remaining_ctx = self.n_ctx - len(cont_tokens) - 8
+            if remaining_ctx < 16:
+                logger.warning(
+                    "Skipping continuation for '%s': insufficient remaining context (%d tokens).",
+                    query_key,
+                    remaining_ctx,
                 )
-            cont_text = cont_res["choices"][0]["text"] or ""
-            _, cont_answer = _parse_model_response(cont_text, started_in_thought=False)
-            return cont_answer or None
-        except Exception as cont_err:
-            logger.warning(f"Continuation extraction failed for '{query_key}': {cont_err}")
-            return None
+                return None
+            max_cont_tokens = min(128, remaining_ctx)
+            cont_res = self.llm(
+                prompt=continuation_prompt,
+                temperature=settings.llm_temperature,
+                top_p=settings.llm_top_p,
+                max_tokens=max_cont_tokens,
+                stop=settings.llm_stop_tokens,
+            )
+        cont_text = cont_res["choices"][0]["text"] or ""
+        _, cont_answer = _parse_model_response(
+            cont_text,
+            started_in_thought=False,
+            thought_open_tag=self._thought_open_tag,
+            thought_close_tag=self._thought_close_tag,
+        )
+        return cont_answer or None
 
     def extract_item(
         self,
@@ -484,87 +670,94 @@ class LocalGemmaEngine:
         # Compute safe prompt budget respecting self.n_ctx while reserving space for generation
         if use_thinking:
             target_gen_limit = settings.llm_thinking_max_tokens
+            continuation_reserve = 144
         else:
             target_gen_limit = settings.llm_single_field_max_tokens
-        reserved_gen_room = min(target_gen_limit, 512)
+            continuation_reserve = 0
+        reserved_gen_room = min(target_gen_limit, 512) + continuation_reserve
         max_prompt_budget = max(256, self.n_ctx - reserved_gen_room - 64)
 
-        prompt = _build_extraction_prompt(
-            context=context,
-            query=target_query,
-            expected_type=expected_type,
-            max_tokens=max_prompt_budget,
-            llm=self.llm,
-            enable_thinking=use_thinking,
-        )
-
-        logger.info(f"--> [LLM] Gemma 4 analyzing context for field '{query_key}'...")
-        try:
-            with self._lock:
-                tokens = self.llm.tokenize(prompt.encode("utf-8"))
-                hard_limit = self.n_ctx - 16
-                if len(tokens) >= hard_limit:
-                    logger.warning(
-                        f"Prompt tokens ({len(tokens)}) reach hard limit ({hard_limit}). "
-                        "Applying emergency truncation to prevent context window overflow."
-                    )
-                    tokens = tokens[: hard_limit - 1]
-                    prompt = self.llm.detokenize(tokens).decode("utf-8", errors="ignore")
-
-                # Dynamically size max_tokens to stay within context bounds and target field limit
-                avail_tokens = max(32, min(target_gen_limit, self.n_ctx - len(tokens) - 8))
-
-                res = self.llm(
-                    prompt=prompt,
-                    temperature=settings.llm_temperature,
-                    top_p=settings.llm_top_p,
-                    max_tokens=avail_tokens,
-                    stop=settings.llm_stop_tokens,
+        logger.info("--> [LLM] Analyzing context for field '%s'...", query_key)
+        with self._lock:
+            prompt = _build_extraction_prompt(
+                context=context,
+                query=target_query,
+                expected_type=expected_type,
+                max_tokens=max_prompt_budget,
+                llm=self.llm,
+                enable_thinking=use_thinking,
+                chat_formatter=self._chat_formatter,
+                thought_open_tag=self._thought_open_tag,
+            )
+            tokens = self.llm.tokenize(prompt.encode("utf-8"))
+            hard_limit = self.n_ctx - 32
+            if len(tokens) >= hard_limit:
+                raise ValueError(
+                    f"Prompt tokens ({len(tokens)}) exceed context window limit ({hard_limit}) "
+                    f"for field '{query_key}'."
                 )
-            raw_content = res["choices"][0]["text"] or ""
-            thinking, raw_answer = _parse_model_response(
-                raw_content,
-                started_in_thought=use_thinking,
+
+            # Dynamically size max_tokens to stay within context bounds and target field limit
+            avail_tokens = max(
+                16,
+                min(target_gen_limit, self.n_ctx - len(tokens) - continuation_reserve - 8),
             )
 
-            # If the model produced thinking but did not reach the answer, attempt continuation
-            if not raw_answer and thinking and use_thinking:
-                cont_answer = self._attempt_continuation(prompt, thinking, query_key)
-                if cont_answer:
-                    raw_answer = cont_answer
+            res = self.llm(
+                prompt=prompt,
+                temperature=settings.llm_temperature,
+                top_p=settings.llm_top_p,
+                max_tokens=avail_tokens,
+                stop=settings.llm_stop_tokens,
+            )
 
-            cleaned_val = _sanitize_extracted_value(raw_answer)
+        raw_content = res["choices"][0]["text"] or ""
+        thinking, raw_answer = _parse_model_response(
+            raw_content,
+            started_in_thought=use_thinking,
+            thought_open_tag=self._thought_open_tag,
+            thought_close_tag=self._thought_close_tag,
+        )
 
-            _log_extraction_trace(query_key=query_key, thinking=thinking, value=cleaned_val)
+        # If the model produced thinking but did not reach the answer, attempt continuation
+        if not raw_answer and thinking and use_thinking:
+            cont_answer = self._attempt_continuation(prompt, thinking, query_key)
+            if cont_answer:
+                raw_answer = cont_answer
 
-            if _is_not_found_value(cleaned_val, expected_type=expected_type):
-                return {"found": False, "value": None, "thinking": thinking}
+        cleaned_val = _sanitize_extracted_value(raw_answer)
+        is_not_found = _is_not_found_value(cleaned_val, expected_type=expected_type)
 
-            return {
-                "found": True,
-                "value": cleaned_val,
-                "thinking": thinking,
-            }
+        _log_extraction_trace(
+            query_key=query_key,
+            thinking=thinking,
+            value=cleaned_val,
+            found=not is_not_found,
+        )
 
-        except Exception as e:
-            logger.error("Error during LLM extraction: %s", e, exc_info=True)
-            return {"found": False, "value": None, "thinking": None}
+        if is_not_found:
+            return {"found": False, "value": None, "thinking": thinking}
+
+        return {
+            "found": True,
+            "value": cleaned_val,
+            "thinking": thinking,
+        }
 
 
-_local_engine_instance: LocalGemmaEngine | None = None
+# Backward-compatible alias for external imports
+LocalGemmaEngine = LocalLLMEngine
+
+_local_engine_instance: LocalLLMEngine | None = None
 _local_engine_lock = threading.Lock()
 
 
-def get_local_engine() -> LocalGemmaEngine | None:
-    """Thread-safe singleton getter for the in-process local engine."""
+def get_local_engine() -> LocalLLMEngine:
+    """Thread-safe singleton getter for the in-process local engine (fails fast on error)."""
     global _local_engine_instance
     if _local_engine_instance is None:
         with _local_engine_lock:
             if _local_engine_instance is None:
                 model_path = _resolve_default_model_path()
-                if model_path.exists():
-                    try:
-                        _local_engine_instance = LocalGemmaEngine(model_path=model_path)
-                    except Exception as e:
-                        logger.warning(f"Could not initialize LocalGemmaEngine: {e}")
+                _local_engine_instance = LocalLLMEngine(model_path=model_path)
     return _local_engine_instance

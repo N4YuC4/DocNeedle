@@ -11,6 +11,20 @@ from docneedle.config import settings
 logger = logging.getLogger(__name__)
 
 
+def _format_embedding_prompt(text: str, is_query: bool) -> str:
+    """Apply instruction prefix when embedding a search query."""
+    return settings.embedding_instruction.format(text=text) if is_query else text
+
+
+def _truncate_and_normalize_vector(raw_emb: np.ndarray, dimension: int) -> np.ndarray:
+    """Truncate MRL embedding vector to target dimension and L2-normalize."""
+    vec = raw_emb[:dimension].astype(np.float32, copy=True)
+    norm = np.linalg.norm(vec)
+    if norm > 0:
+        vec /= norm
+    return vec
+
+
 class BaseEmbedder:
     """Abstract base interface for document and query embedders."""
 
@@ -77,10 +91,7 @@ class LlamaCppHarrierEmbedder(BaseEmbedder):
         if not text.strip():
             return np.zeros(self.dimension, dtype=np.float32)
 
-        if is_query:
-            prompt = settings.embedding_instruction.format(text=text)
-        else:
-            prompt = text
+        prompt = _format_embedding_prompt(text, is_query)
 
         with self._lock:
             try:
@@ -92,13 +103,7 @@ class LlamaCppHarrierEmbedder(BaseEmbedder):
                 truncated_prompt = self.llm.detokenize(safe_tokens).decode("utf-8", errors="ignore")
                 res = self.llm.create_embedding(truncated_prompt)
         raw_emb = np.array(res["data"][0]["embedding"], dtype=np.float32)
-
-        # MRL truncation to target dimension & L2 normalization
-        vec = raw_emb[: self.dimension]
-        norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec /= norm
-        return vec.astype(np.float32)
+        return _truncate_and_normalize_vector(raw_emb, self.dimension)
 
     def embed_texts(
         self,
@@ -121,22 +126,13 @@ class LlamaCppHarrierEmbedder(BaseEmbedder):
                 for t in batch:
                     results.append(self._embed_single(t, is_query=is_query))
                 continue
-            prompts = [
-                self._sanitize_prompt(
-                    settings.embedding_instruction.format(text=t) if is_query else t
-                )
-                for t in batch
-            ]
+            prompts = [self._sanitize_prompt(_format_embedding_prompt(t, is_query)) for t in batch]
             try:
                 with self._lock:
                     res = self.llm.create_embedding(prompts)
                 for item in res["data"]:
                     raw_emb = np.array(item["embedding"], dtype=np.float32)
-                    vec = raw_emb[: self.dimension]
-                    norm = np.linalg.norm(vec)
-                    if norm > 0:
-                        vec /= norm
-                    results.append(vec)
+                    results.append(_truncate_and_normalize_vector(raw_emb, self.dimension))
             except Exception as e:
                 logger.debug(f"Batch embedding fallback triggered ({e}). Retrying individually...")
                 # Retry individually if batch exceeds context
@@ -206,10 +202,7 @@ class OnnxHarrierEmbedder(BaseEmbedder):
             for idx, t in enumerate(batch):
                 clean_t = t.strip()
                 if clean_t:
-                    prompt = (
-                        settings.embedding_instruction.format(text=clean_t) if is_query else clean_t
-                    )
-                    valid_prompts.append(prompt)
+                    valid_prompts.append(_format_embedding_prompt(clean_t, is_query))
                     valid_indices.append(idx)
 
             batch_embs = np.zeros((len(batch), self.dimension), dtype=np.float32)

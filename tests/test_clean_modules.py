@@ -6,9 +6,14 @@ from docneedle.extraction.service import _build_retrieval_query, _find_best_supp
 from docneedle.ingest.chunker import DoclingChunker
 from docneedle.ingest.models import DocumentChunk
 from docneedle.llm.local_engine import (
+    TYPE_GUIDELINES,
+    LocalLLMEngine,
     _build_extraction_prompt,
     _is_not_found_value,
+    _log_extraction_trace,
     _parse_model_response,
+    _probe_template_delimiters,
+    _resolve_default_model_path,
     _sanitize_extracted_value,
 )
 from docneedle.retrieval.models import SearchResult
@@ -87,39 +92,136 @@ class TestLLMLocalEngineHelpers:
         assert _is_not_found_value("N/A") is True
         assert _is_not_found_value("None") is True
         assert _is_not_found_value("Ahmet Yilmaz") is False
+        # Word-boundary check: words ending with a not-found substring must not be flagged
+        assert _is_not_found_value("Kamyon") is False
+        assert _is_not_found_value("Piyano") is False
+        # Boolean field: "Yok" and "False" are valid negative boolean answers, not missing
+        assert _is_not_found_value("False", expected_type="boolean") is False
+        assert _is_not_found_value("Yok", expected_type="boolean") is False
+        assert _is_not_found_value("Yoktur", expected_type="boolean") is False
+        assert _is_not_found_value("Bulunamadı", expected_type="boolean") is True
 
-    def test_build_extraction_prompt_structure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from docneedle.config import settings
-
-        # Verify Mistral / Ministral format
-        monkeypatch.setattr(settings, "llm_model_name", "Ministral-3-3B-Instruct-2512-Q4_K_M")
+    def test_build_extraction_prompt_structure(self) -> None:
+        # Universal turn format when no chat_formatter is provided
         prompt = _build_extraction_prompt(
             context="Kira: 1000 TL", query="Kira bedeli?", enable_thinking=False
         )
-        assert "[SYSTEM_PROMPT]" in prompt
-        assert "[INST]" in prompt
-        assert "[/INST]" in prompt
+        assert "<|turn>system\n" in prompt
+        assert "<|turn>user\n" in prompt
+        assert "<|turn>model\n" in prompt
         assert "Kira: 1000 TL" in prompt
 
-        # Verify explicit thinking mode in Ministral format
         prompt_thinking = _build_extraction_prompt(
             context="Kira: 1000 TL", query="Kira bedeli?", enable_thinking=True
         )
-        assert "<think>\n" in prompt_thinking
+        assert "<|channel>thought\n" in prompt_thinking
 
-        # Verify Gemma turn format
-        monkeypatch.setattr(settings, "llm_model_name", "gemma-4-E2B-it-qat-UD-Q4_K_XL")
-        prompt_gemma = _build_extraction_prompt(
-            context="Kira: 1000 TL", query="Kira bedeli?", enable_thinking=False
+        # Dynamic GGUF Jinja2 chat template format (model-agnostic)
+        chatml_template = (
+            "{% for m in messages %}"
+            "<|im_start|>{{ m['role'] }}\n{{ m['content'] }}<|im_end|>\n"
+            "{% endfor %}"
+            "{% if add_generation_prompt %}<|im_start|>assistant\n"
+            "{% if enable_thinking %}<think>\n{% endif %}{% endif %}"
         )
-        assert "<|turn>system\n" in prompt_gemma
-        assert "<|turn>user\n" in prompt_gemma
-        assert "<|turn>model\n" in prompt_gemma
+        formatter, open_tag, close_tag = _probe_template_delimiters(
+            chatml_template, bos_token="", eos_token="<|im_end|>"
+        )
+        dyn_prompt = _build_extraction_prompt(
+            context="Kira: 1000 TL",
+            query="Kira bedeli?",
+            enable_thinking=True,
+            chat_formatter=formatter,
+            thought_open_tag=open_tag,
+        )
+        assert "<|im_start|>system\n" in dyn_prompt
+        assert "<|im_start|>user\n" in dyn_prompt
+        assert "<|im_start|>assistant\n<think>\n" in dyn_prompt
+        assert "Kira: 1000 TL" in dyn_prompt
 
-        prompt_thinking_gemma = _build_extraction_prompt(
-            context="Kira: 1000 TL", query="Kira bedeli?", enable_thinking=True
+    def test_build_extraction_prompt_truncates_only_context_preserving_question(self) -> None:
+        class DummyLLM:
+            def tokenize(self, b: bytes) -> list[int]:
+                return [1] * len(b.decode("utf-8").split())
+
+            def detokenize(self, toks: list[int]) -> bytes:
+                return (" ".join(["kelime"] * len(toks))).encode("utf-8")
+
+        long_ctx = " ".join(f"satir_{i}" for i in range(500))
+        prompt = _build_extraction_prompt(
+            context=long_ctx,
+            query="Kira bedeli nedir?",
+            max_tokens=320,
+            llm=DummyLLM(),
+            enable_thinking=False,
         )
-        assert "<|channel>thought\n" in prompt_thinking_gemma
+        assert "Question / Target Field: Kira bedeli nedir?" in prompt
+        assert prompt.endswith("<turn|>\n<|turn>model\n")
+        assert "satir_499" not in prompt
+
+    def test_resolve_default_model_path_strict_no_fallback(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        from docneedle.config import settings
+
+        llm_dir = tmp_path / "llm"
+        llm_dir.mkdir(parents=True)
+        # Put an unrelated GGUF file in the directory; must NOT silently fall back to it
+        (llm_dir / "other-unrelated-model.gguf").write_bytes(b"GGUF")
+
+        monkeypatch.setattr(settings, "model_storage_dir", str(tmp_path))
+        monkeypatch.setattr(settings, "llm_model_name", "missing-configured-model")
+
+        with pytest.raises(FileNotFoundError, match="missing-configured-model"):
+            _resolve_default_model_path()
+
+    def test_log_extraction_trace_redacts_pii_by_default(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        from docneedle.config import settings
+
+        monkeypatch.setattr(settings, "llm_log_extraction_payloads", False)
+        with caplog.at_level(logging.DEBUG):
+            _log_extraction_trace(
+                query_key="tc_kimlik",
+                thinking="Gizli dusunce 12345678901",
+                value="12345678901",
+                found=True,
+            )
+        assert "12345678901" not in caplog.text
+
+    def test_type_guidelines_examples_have_no_ambiguous_or(self) -> None:
+        for key, guide in TYPE_GUIDELINES.items():
+            assert " or " not in guide["example"], f"Ambiguous 'or' in example for {key}"
+
+    def test_continuation_respects_context_window_bounds(self) -> None:
+        import threading
+
+        class FakeLlama:
+            def __init__(self) -> None:
+                self.last_max_tokens: int | None = None
+
+            def tokenize(self, b: bytes) -> list[int]:
+                # Simulate prompt + thinking already consuming 990 of 1024 tokens
+                return [1] * 990
+
+            def __call__(self, **kwargs):
+                self.last_max_tokens = kwargs["max_tokens"]
+                return {"choices": [{"text": "25.000 TL"}]}
+
+        engine = object.__new__(LocalLLMEngine)
+        engine.n_ctx = 1024
+        engine.llm = FakeLlama()
+        engine._lock = threading.Lock()
+        engine._thought_open_tag = "<|channel>thought\n"
+        engine._thought_close_tag = "\n<channel|>\n"
+
+        ans = engine._attempt_continuation("prompt", "uzun dusunce", "kira_bedeli")
+        assert ans == "25.000 TL"
+        assert engine.llm.last_max_tokens is not None
+        assert 990 + engine.llm.last_max_tokens <= engine.n_ctx
 
     def test_build_extraction_prompt_with_type_guidelines(self) -> None:
         prompt = _build_extraction_prompt(
@@ -455,6 +557,54 @@ class TestEphemeralRapidOCREngine:
 
         # After exiting with block, engine reference must be cleared
         assert engine.ocr is None
+        assert engine.active_use_cuda is False
+
+    def test_ephemeral_engine_gpu_and_cpu_params(self, monkeypatch) -> None:
+        from unittest.mock import MagicMock
+
+        from docneedle.config import settings
+        from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine, _resolve_ocr_use_cuda
+
+        mock_rapid_inst = MagicMock()
+        mock_rapid_cls = MagicMock(return_value=mock_rapid_inst)
+        monkeypatch.setattr("rapidocr.RapidOCR", mock_rapid_cls)
+
+        # 1. Force GPU mode via monkeypatching _resolve_ocr_use_cuda -> True
+        monkeypatch.setattr(
+            "docneedle.ingest.ocr_engine._resolve_ocr_use_cuda", lambda _=None: True
+        )
+        with EphemeralRapidOCREngine(text_score=0.55, use_cuda=True) as ocr_gpu:
+            assert ocr_gpu.active_use_cuda is True
+            called_params = mock_rapid_cls.call_args.kwargs["params"]
+            assert called_params["EngineConfig.onnxruntime.use_cuda"] is True
+            assert called_params["Rec.rec_batch_num"] == settings.ocr_rec_batch_num
+            assert (
+                called_params["EngineConfig.onnxruntime.cuda_ep_cfg.device_id"]
+                == settings.ocr_gpu_device_id
+            )
+            assert (
+                called_params["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search"]
+                == settings.ocr_cuda_conv_algo_search
+            )
+            assert (
+                called_params["EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy"]
+                == settings.ocr_cuda_arena_extend_strategy
+            )
+
+        # 2. Force CPU mode -> use_cuda=False
+        mock_rapid_cls.reset_mock()
+        monkeypatch.setattr(
+            "docneedle.ingest.ocr_engine._resolve_ocr_use_cuda", lambda _=None: False
+        )
+        with EphemeralRapidOCREngine(use_cuda=False) as ocr_cpu:
+            assert ocr_cpu.active_use_cuda is False
+            cpu_params = mock_rapid_cls.call_args.kwargs["params"]
+            assert cpu_params["EngineConfig.onnxruntime.use_cuda"] is False
+            assert cpu_params["Rec.rec_batch_num"] == 6
+            assert "EngineConfig.onnxruntime.cuda_ep_cfg.device_id" not in cpu_params
+
+        # 3. _resolve_ocr_use_cuda respects explicit False override
+        assert _resolve_ocr_use_cuda(False) is False
 
 
 class TestCodeReviewRegressionFixes:
@@ -793,3 +943,34 @@ gpu_enabled = true
         assert s.port == 9123
         assert s.host == "127.0.0.1"
         assert s.gpu_enabled is True
+
+
+class TestRefactoredParserAndEmbedderHelpers:
+    """Test newly extracted pure helpers in parser, ocr_engine, and embedder."""
+
+    def test_parser_markdown_helpers(self) -> None:
+        from docneedle.ingest.parser import _extract_markdown_body, _format_clean_lines
+
+        assert _format_clean_lines("  Line 1 \n\n  Line 2  \n ") == "Line 1\n\nLine 2"
+        md = "# Document Title\n\n## Sayfa 1\n\nActual paragraph content.\n## Sayfa 2\nMore text."
+        body = _extract_markdown_body(md)
+        assert "Document Title" not in body
+        assert "Sayfa 1" not in body
+        assert "Actual paragraph content." in body
+        assert "More text." in body
+
+    def test_embedder_vector_helpers(self) -> None:
+        import numpy as np
+
+        from docneedle.retrieval.embedder import (
+            _format_embedding_prompt,
+            _truncate_and_normalize_vector,
+        )
+
+        assert _format_embedding_prompt("test doc", is_query=False) == "test doc"
+        assert "test query" in _format_embedding_prompt("test query", is_query=True)
+
+        raw = np.array([3.0, 4.0, 99.0, 100.0], dtype=np.float32)
+        vec = _truncate_and_normalize_vector(raw, dimension=2)
+        assert vec.shape == (2,)
+        assert np.allclose(vec, np.array([0.6, 0.8], dtype=np.float32))

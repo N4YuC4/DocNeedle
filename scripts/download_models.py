@@ -167,21 +167,67 @@ def download_llm_model(models_dir: str) -> None:
 
 
 def download_rapidocr_models() -> None:
-    """Pre-download RapidOCR detection and recognition ONNX models."""
+    """Pre-download RapidOCR detection and recognition ONNX models without importing onnxruntime."""
     try:
-        from rapidocr import ModelType, RapidOCR
+        from pathlib import Path
+
+        import rapidocr
+        from rapidocr.inference_engine.base import FileInfo
+        from rapidocr.utils.download_models import download_task
+        from rapidocr.utils.typings import (
+            EngineType,
+            LangDet,
+            LangRec,
+            ModelType,
+            OCRVersion,
+            TaskType,
+        )
 
         print("\nChecking/Downloading RapidOCR PP-OCRv6 models...")
-        _ = RapidOCR(
-            params={
-                "Det.model_type": ModelType.SMALL,
-                "Rec.model_type": ModelType.MEDIUM,
-                "EngineConfig.onnxruntime.use_cuda": False,
-            }
-        )
+        ocr_models_dir = Path(rapidocr.__file__).resolve().parent / "models"
+        ocr_models_dir.mkdir(parents=True, exist_ok=True)
+        for model_tier in (ModelType.SMALL, ModelType.MEDIUM):
+            try:
+                download_task(
+                    ocr_models_dir,
+                    FileInfo(
+                        EngineType.ONNXRUNTIME,
+                        OCRVersion.PPOCRV6,
+                        TaskType.DET,
+                        LangDet.CH,
+                        model_tier,
+                    ),
+                )
+            except ValueError:
+                pass
+            try:
+                download_task(
+                    ocr_models_dir,
+                    FileInfo(
+                        EngineType.ONNXRUNTIME,
+                        OCRVersion.PPOCRV6,
+                        TaskType.REC,
+                        LangRec.CH,
+                        model_tier,
+                    ),
+                )
+            except ValueError:
+                pass
         print("RapidOCR models are verified and present.")
     except Exception as e:
         print(f"RapidOCR models check bypassed: {e}")
+
+
+def download_chunker_tokenizer(tokenizer_model: str = "Qwen/Qwen3-Reranker-0.6B") -> None:
+    """Pre-download Hugging Face tokenizer used by DoclingChunker so GPU workers do not wait."""
+    try:
+        from transformers import AutoTokenizer
+
+        print(f"\nChecking/Downloading chunker tokenizer ({tokenizer_model})...")
+        AutoTokenizer.from_pretrained(tokenizer_model)
+        print("Chunker tokenizer is verified and cached.")
+    except Exception as e:
+        print(f"Chunker tokenizer check bypassed: {e}")
 
 
 def ensure_all_models_present(models_dir: str | None = None) -> None:
@@ -200,6 +246,7 @@ def ensure_all_models_present(models_dir: str | None = None) -> None:
                 filename=cfg.get("filename"),
             )
     download_rapidocr_models()
+    download_chunker_tokenizer()
 
 
 def main() -> None:

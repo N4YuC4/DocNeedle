@@ -47,6 +47,21 @@ def _validate_file_size(filename: str, content: bytes, max_bytes: int) -> None:
         )
 
 
+async def _read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
+    """Read uploaded files into memory and validate non-empty list and per-file size limits."""
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one document file must be uploaded.")
+
+    max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    files_data: list[tuple[str, bytes]] = []
+    for upload in files:
+        content = await upload.read()
+        filename = upload.filename or "uploaded_document"
+        _validate_file_size(filename, content, max_bytes)
+        files_data.append((filename, content))
+    return files_data
+
+
 @router.post("/extract", response_model=ExtractionResponse)
 async def extract_from_documents(
     files: list[UploadFile] = File(
@@ -66,30 +81,25 @@ async def extract_from_documents(
     ),
 ) -> ExtractionResponse:
     """Extract structured data items from documents in a single privacy-preserving session."""
-    if not files:
-        raise HTTPException(status_code=400, detail="At least one document file must be uploaded.")
-
+    files_data = await _read_and_validate_uploads(files)
     items = _parse_extraction_schema(items_schema)
-    max_bytes = settings.max_upload_size_mb * 1024 * 1024
     request_start = time.perf_counter()
     ingestion_service = IngestionService()
     extraction_service = ExtractionService()
     store = SessionVectorStore()
 
     try:
-        filenames = [u.filename for u in files]
+        filenames = [fname for fname, _ in files_data]
         query_keys = [it.key for it in items]
         logger.info(f"[EXTRACTION SESSION] Files: {filenames} | Queries: {query_keys}")
         all_chunks: list[DocumentChunk] = []
 
         with ingestion_service.parser:
-            for idx, upload in enumerate(files, 1):
-                content = await upload.read()
-                filename = upload.filename or "uploaded_document"
-                _validate_file_size(filename, content, max_bytes)
-
+            for idx, (filename, content) in enumerate(files_data, 1):
                 kb_size = len(content) / 1024
-                logger.info(f"--> [{idx}/{len(files)}] Parsing: {filename} ({kb_size:.1f} KB)...")
+                logger.info(
+                    f"--> [{idx}/{len(files_data)}] Parsing: {filename} ({kb_size:.1f} KB)..."
+                )
                 ingest_result = await asyncio.to_thread(
                     ingestion_service.ingest_bytes,
                     content=content,

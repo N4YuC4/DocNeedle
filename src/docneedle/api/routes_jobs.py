@@ -8,10 +8,12 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 
-from docneedle.api.routes_extract import _parse_extraction_schema, _validate_file_size
-from docneedle.config import settings
+from docneedle.api.routes_extract import (
+    _parse_extraction_schema,
+    _read_and_validate_uploads,
+)
 from docneedle.jobs.manager import job_manager
-from docneedle.jobs.models import JobCreateResponse, JobStatusResponse
+from docneedle.jobs.models import JobCreateResponse, JobStatus, JobStatusResponse
 
 logger = logging.getLogger(__name__)
 
@@ -41,20 +43,10 @@ async def create_extraction_job(
 
     Returns 202 Accepted immediately with job tracking URLs.
     """
-    if not files:
-        raise HTTPException(status_code=400, detail="At least one document file must be uploaded.")
-
+    files_data = await _read_and_validate_uploads(files)
     items = _parse_extraction_schema(items_schema)
-    max_bytes = settings.max_upload_size_mb * 1024 * 1024
-
-    files_data: list[tuple[str, bytes]] = []
-    for upload in files:
-        content = await upload.read()
-        filename = upload.filename or "uploaded_document"
-        _validate_file_size(filename, content, max_bytes)
-        files_data.append((filename, content))
-
     job_id = job_manager.create_job(total_items=len(items))
+    job_info = job_manager.get_job(job_id)
 
     # Launch background worker
     asyncio.create_task(
@@ -69,10 +61,10 @@ async def create_extraction_job(
     base_path = "/v1/jobs"
     return JobCreateResponse(
         job_id=job_id,
-        status=job_manager.get_job(job_id).status,  # type: ignore
+        status=job_info.status if job_info else JobStatus.PENDING,
         poll_url=f"{base_path}/{job_id}",
         events_url=f"{base_path}/{job_id}/events",
-        created_at=job_manager.get_job(job_id).created_at,  # type: ignore
+        created_at=job_info.created_at if job_info else 0.0,
     )
 
 

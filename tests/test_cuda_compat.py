@@ -24,4 +24,3 @@ def test_preload_cuda_runtime_with_mock_paths() -> None:
     with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/fake_cuda_dir"}):
         result = preload_cuda_runtime_libs()
         assert isinstance(result, bool)
-

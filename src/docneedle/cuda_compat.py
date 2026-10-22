@@ -35,6 +35,10 @@ def preload_cuda_runtime_libs() -> bool:
     for mod_name in (
         "nvidia.cublas",
         "nvidia.cuda_runtime",
+        "nvidia.cudnn",
+        "nvidia.curand",
+        "nvidia.cufft",
+        "nvidia.nvjitlink",
         "nvidia.cu12",
         "nvidia.cu13",
     ):
@@ -66,6 +70,7 @@ def preload_cuda_runtime_libs() -> bool:
     # 3. Probe standard system library directories
     for sys_dir in (
         "/usr/local/cuda/lib64",
+        "/usr/local/cuda-13/lib64",
         "/usr/local/cuda-12/lib64",
         "/usr/local/nvidia/lib64",
         "/usr/lib/x86_64-linux-gnu",
@@ -106,10 +111,18 @@ def preload_cuda_runtime_libs() -> bool:
 
     # 4. Preload in strict dependency order:
     # libcublas depends on libcublasLt, so load libcublasLt first, then libcublas, then libcudart.
+    # Include both CUDA 12 (for llama-cpp-python) and CUDA 13 + cuDNN 9 (for onnxruntime-gpu).
     target_patterns = [
-        ("libcublasLt.so.12", "libcublasLt.so*"),
-        ("libcublas.so.12", "libcublas.so*"),
-        ("libcudart.so.12", "libcudart.so*"),
+        ("libcublasLt.so.12", "libcublasLt.so.12*"),
+        ("libcublas.so.12", "libcublas.so.12*"),
+        ("libcudart.so.12", "libcudart.so.12*"),
+        ("libcublasLt.so.13", "libcublasLt.so.13*"),
+        ("libcublas.so.13", "libcublas.so.13*"),
+        ("libnvrtc.so.13", "libnvrtc.so*"),
+        ("libcurand.so.10", "libcurand.so*"),
+        ("libcufft.so.12", "libcufft.so*"),
+        ("libcudart.so.13", "libcudart.so.13*"),
+        ("libcudnn.so.9", "libcudnn.so.9*"),
     ]
 
     loaded_any = False

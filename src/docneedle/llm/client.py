@@ -19,15 +19,11 @@ class LLMClient:
     ) -> LLMExtractionResult:
         """Extract item directly via in-process local neural model."""
         local_engine = get_local_engine()
-        if local_engine is not None:
-            return await asyncio.to_thread(
-                local_engine.extract_item,
-                query_key=query_key,
-                query_description=query_description,
-                context=context,
-                expected_type=expected_type,
-                enable_thinking=enable_thinking,
-            )
-
-        logger.error("Local LLM engine is not initialized.")
-        return {"found": False, "value": None, "thinking": None}
+        return await asyncio.to_thread(
+            local_engine.extract_item,
+            query_key=query_key,
+            query_description=query_description,
+            context=context,
+            expected_type=expected_type,
+            enable_thinking=enable_thinking,
+        )

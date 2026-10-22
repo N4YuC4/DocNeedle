@@ -56,6 +56,7 @@ async def health_check() -> dict[str, object]:
             "llm_model": settings.llm_model_name,
             "llm_speculative_enabled": settings.llm_speculative_enabled,
             "ocr_enabled": settings.ocr_enabled,
+            "ocr_use_cuda": settings.ocr_use_cuda,
             "reranker_enabled": settings.reranker_enabled,
             "gpu_enabled": settings.gpu_enabled,
             "cpu_threads": settings.cpu_threads,

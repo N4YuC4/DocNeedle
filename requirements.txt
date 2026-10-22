@@ -1,6 +1,8 @@
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
 nvidia-cuda-runtime-cu12; platform_system == "Linux" and (platform_machine == "x86_64" or platform_machine == "aarch64")
 nvidia-cublas-cu12; platform_system == "Linux" and (platform_machine == "x86_64" or platform_machine == "aarch64")
+cuda-toolkit[cublas,cudart,cufft,curand,nvrtc]>=13.0.0; platform_system == "Linux" and (platform_machine == "x86_64" or platform_machine == "aarch64")
+nvidia-cudnn-cu13>=9.0.0; platform_system == "Linux" and (platform_machine == "x86_64" or platform_machine == "aarch64")
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.9.0
@@ -17,7 +19,8 @@ docling-core[chunking]>=2.15.0
 python-docx>=1.1.0
 openpyxl>=3.1.0
 beautifulsoup4>=4.12.0
-onnxruntime>=1.19.0
+onnxruntime-gpu>=1.19.0; (platform_system == "Linux" or platform_system == "Windows") and (platform_machine == "x86_64" or platform_machine == "AMD64" or platform_machine == "aarch64")
+onnxruntime>=1.19.0; platform_system == "Darwin" or (platform_machine != "x86_64" and platform_machine != "AMD64" and platform_machine != "aarch64")
 rapidocr>=3.0.0
 rank-bm25>=0.2.2
 pypdfium2>=4.30.0
