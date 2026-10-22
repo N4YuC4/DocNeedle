@@ -186,6 +186,9 @@ class JobManager:
             return
         record.status = JobStatus.COMPLETED
         record.completed_at = time.time()
+        if response and record.created_at:
+            proc_ms = round((record.completed_at - record.created_at) * 1000.0, 2)
+            response.processing_time_ms = proc_ms
         record.response = response
         if response and response.results:
             record.results = list(response.results)

@@ -33,10 +33,10 @@ MODELS_CONFIG = {
     },
     "llm": {
         "name": "gemma-4-E2B-it-qat-UD-Q4_K_XL",
-        "repo_id": "unsloth/gemma-4-E2B-it-GGUF",
+        "repo_id": "unsloth/gemma-4-E2B-it-qat-GGUF",
         "filename": "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
         "url": (
-            "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/"
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/"
             "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"
         ),
         "subpath": os.path.join("llm", "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
@@ -166,6 +166,24 @@ def download_llm_model(models_dir: str) -> None:
     )
 
 
+def download_rapidocr_models() -> None:
+    """Pre-download RapidOCR detection and recognition ONNX models."""
+    try:
+        from rapidocr import ModelType, RapidOCR
+
+        print("\nChecking/Downloading RapidOCR PP-OCRv6 models...")
+        _ = RapidOCR(
+            params={
+                "Det.model_type": ModelType.SMALL,
+                "Rec.model_type": ModelType.MEDIUM,
+                "EngineConfig.onnxruntime.use_cuda": False,
+            }
+        )
+        print("RapidOCR models are verified and present.")
+    except Exception as e:
+        print(f"RapidOCR models check bypassed: {e}")
+
+
 def ensure_all_models_present(models_dir: str | None = None) -> None:
     """Ensure all required quantized models exist, downloading any missing ones."""
     if models_dir is None:
@@ -181,6 +199,7 @@ def ensure_all_models_present(models_dir: str | None = None) -> None:
                 repo_id=cfg.get("repo_id"),
                 filename=cfg.get("filename"),
             )
+    download_rapidocr_models()
 
 
 def main() -> None:

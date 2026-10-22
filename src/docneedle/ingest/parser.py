@@ -1,4 +1,3 @@
-import io
 import logging
 import re
 import tempfile
@@ -7,14 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from docling.datamodel.base_models import DocumentStream, InputFormat
-from docling.datamodel.document import DoclingDocument
-from docling.datamodel.pipeline_options import PdfPipelineOptions
-from docling.document_converter import (
-    DocumentConverter,
-    ImageFormatOption,
-    PdfFormatOption,
-)
+from docling_core.types.doc.document import DoclingDocument
 
 from docneedle.config import settings
 
@@ -126,14 +118,35 @@ def _pdf_has_embedded_text(
 def _markdown_to_docling_document(
     markdown_content: str,
     title: str,
-    converter: DocumentConverter,
 ) -> DoclingDocument:
-    """Convert an in-memory markdown string into a DoclingDocument via DocumentStream."""
-    stream = DocumentStream(
-        name=f"{title}.md",
-        stream=io.BytesIO(markdown_content.encode("utf-8")),
-    )
-    return converter.convert(stream).document
+    """Convert markdown string into a DoclingDocument preserving hierarchy and lines."""
+    doc = DoclingDocument(name=title)
+    if title:
+        doc.add_title(text=title)
+
+    current_lines: list[str] = []
+
+    def flush() -> None:
+        nonlocal current_lines
+        if current_lines:
+            doc.add_text(text="\n".join(current_lines), label="text")
+            current_lines = []
+
+    for raw_line in markdown_content.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            continue
+        if stripped.startswith("#"):
+            flush()
+            level = len(stripped) - len(stripped.lstrip("#"))
+            h_text = stripped.lstrip("#").strip()
+            doc.add_heading(text=h_text, level=min(level, 6))
+        else:
+            current_lines.append(line)
+    flush()
+    return doc
 
 
 class DoclingParser:
@@ -141,7 +154,6 @@ class DoclingParser:
 
     def __init__(self, ocr_enabled: bool | None = None) -> None:
         self.ocr_enabled = settings.ocr_enabled if ocr_enabled is None else ocr_enabled
-        self._converter_fast: DocumentConverter | None = None
         self._active_ocr_engine: Any = None
 
     def __enter__(self) -> "DoclingParser":
@@ -170,20 +182,6 @@ class DoclingParser:
                 yield engine
         else:
             yield None
-
-    def _get_fast_converter(self) -> DocumentConverter:
-        """Lazily initialize the DocumentConverter for digital text and markdown."""
-        if self._converter_fast is None:
-            pipeline_opts = PdfPipelineOptions()
-            pipeline_opts.do_ocr = False
-            pipeline_opts.do_table_structure = False
-            self._converter_fast = DocumentConverter(
-                format_options={
-                    InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
-                    InputFormat.IMAGE: ImageFormatOption(),
-                }
-            )
-        return self._converter_fast
 
     def _ocr_single_pdf_page(self, page: Any, engine: Any) -> str:
         """Render a single PDF page and transcribe it with the given RapidOCR engine."""
@@ -231,6 +229,12 @@ class DoclingParser:
                     ):
                         can_ocr = max_ocr_p <= 0 or ocr_pages_count < max_ocr_p
                         if can_ocr:
+                            logger.info(
+                                "--> [OCR Fallback] Page %d/%d of '%s' has unreadable text; OCR...",
+                                i + 1,
+                                len(pdf),
+                                title,
+                            )
                             engine = self._active_ocr_engine
                             if engine is None:
                                 if local_ocr_engine is None:
@@ -255,7 +259,6 @@ class DoclingParser:
         return _markdown_to_docling_document(
             markdown_content="\n".join(md_parts),
             title=title,
-            converter=self._get_fast_converter(),
         )
 
     def _parse_scanned_pdf(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
@@ -268,10 +271,19 @@ class DoclingParser:
             total_pages = len(pdf)
             max_p = settings.max_ocr_pages
             pages_to_ocr = min(total_pages, max_p) if max_p > 0 else total_pages
+            logger.info(
+                "PDF '%s' is scanned (%d pages). Processing first %d pages with RapidOCR...",
+                title,
+                total_pages,
+                pages_to_ocr,
+            )
 
             md_parts = [f"# {title}\n"]
             with self._acquire_ocr_engine() as engine:
                 for page_idx in range(pages_to_ocr):
+                    logger.info(
+                        f"--> [OCR] Processing page {page_idx + 1}/{pages_to_ocr} of '{title}'..."
+                    )
                     page = pdf[page_idx]
                     try:
                         page_text = self._ocr_single_pdf_page(page, engine)
@@ -289,7 +301,6 @@ class DoclingParser:
         return _markdown_to_docling_document(
             markdown_content="\n".join(md_parts),
             title=title,
-            converter=self._get_fast_converter(),
         )
 
     def _parse_image(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
@@ -309,8 +320,89 @@ class DoclingParser:
         return _markdown_to_docling_document(
             markdown_content=full_md,
             title=title,
-            converter=self._get_fast_converter(),
         )
+
+    def _parse_docx(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+        """Extract structured text and tables from a DOCX file."""
+        import docx
+
+        title = doc_title or path_obj.stem
+        doc = docx.Document(path_obj)
+        md_parts = [f"# {title}\n"]
+
+        for p in doc.paragraphs:
+            txt = p.text.strip()
+            if not txt:
+                continue
+            style_name = getattr(p.style, "name", "")
+            if "Heading" in style_name:
+                md_parts.append(f"## {txt}\n")
+            else:
+                md_parts.append(f"{txt}\n")
+
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+                md_parts.append("| " + " | ".join(cells) + " |")
+            md_parts.append("")
+
+        return _markdown_to_docling_document("\n".join(md_parts), title=title)
+
+    def _parse_xlsx(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+        """Extract structured sheets and tables from an XLSX file."""
+        import openpyxl
+
+        title = doc_title or path_obj.stem
+        wb = openpyxl.load_workbook(path_obj, data_only=True)
+        md_parts = [f"# {title}\n"]
+
+        for sheet_name in wb.sheetnames:
+            sheet = wb[sheet_name]
+            md_parts.append(f"## {sheet_name}\n")
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows:
+                continue
+            header_written = False
+            for row in rows:
+                cell_strs = [str(c) if c is not None else "" for c in row]
+                if not any(cell_strs):
+                    continue
+                md_parts.append("| " + " | ".join(cell_strs) + " |")
+                if not header_written:
+                    md_parts.append("| " + " | ".join(["---"] * len(cell_strs)) + " |")
+                    header_written = True
+            md_parts.append("")
+
+        return _markdown_to_docling_document("\n".join(md_parts), title=title)
+
+    def _parse_html(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+        """Extract structured text from an HTML file."""
+        from bs4 import BeautifulSoup
+
+        title = doc_title or path_obj.stem
+        html_text = path_obj.read_text(encoding="utf-8", errors="ignore")
+        soup = BeautifulSoup(html_text, "html.parser")
+        title_tag = soup.find("title")
+        t = title_tag.get_text().strip() if title_tag else title
+        md_parts = [f"# {t}\n"]
+
+        for tag in soup.find_all(["h1", "h2", "h3", "h4", "p", "li", "tr"]):
+            txt = tag.get_text(separator=" ", strip=True)
+            if not txt:
+                continue
+            if tag.name in ("h1", "h2", "h3", "h4"):
+                lvl = int(tag.name[1])
+                md_parts.append(f"{'#' * min(lvl + 1, 6)} {txt}\n")
+            else:
+                md_parts.append(f"{txt}\n")
+
+        return _markdown_to_docling_document("\n".join(md_parts), title=title)
+
+    def _parse_text(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+        """Extract text from plain text or markdown files."""
+        title = doc_title or path_obj.stem
+        text = path_obj.read_text(encoding="utf-8", errors="ignore")
+        return _markdown_to_docling_document(text, title=title)
 
     def parse_path(
         self, path: Path | str, display_name: str | None = None
@@ -325,12 +417,8 @@ class DoclingParser:
         suffix = path_obj.suffix.lower()
 
         if suffix in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
-            if self.ocr_enabled:
-                logger.info(f"Image '{filename}' detected; running ephemeral RapidOCR.")
-                return self._parse_image(path_obj, doc_title=doc_title), filename
-            else:
-                conv = self._get_fast_converter()
-                return conv.convert(path_obj).document, filename
+            logger.info(f"Image '{filename}' detected; running ephemeral RapidOCR.")
+            return self._parse_image(path_obj, doc_title=doc_title), filename
 
         if suffix == ".pdf":
             has_text = _pdf_has_embedded_text(path_obj)
@@ -363,10 +451,23 @@ class DoclingParser:
                     return self._parse_scanned_pdf(path_obj, doc_title=doc_title), filename
                 return doc, filename
 
-        # DOCX, XLSX, HTML, Markdown, etc.
-        conv = self._get_fast_converter()
-        result = conv.convert(path_obj)
-        return result.document, filename
+        if suffix == ".docx":
+            return self._parse_docx(path_obj, doc_title=doc_title), filename
+
+        if suffix in {".xlsx", ".xls"}:
+            return self._parse_xlsx(path_obj, doc_title=doc_title), filename
+
+        if suffix in {".html", ".htm"}:
+            return self._parse_html(path_obj, doc_title=doc_title), filename
+
+        if suffix in {".txt", ".md", ".json", ".csv", ".tsv", ".xml"}:
+            return self._parse_text(path_obj, doc_title=doc_title), filename
+
+        # Default fallback: try reading as text
+        try:
+            return self._parse_text(path_obj, doc_title=doc_title), filename
+        except Exception:
+            return self._parse_image(path_obj, doc_title=doc_title), filename
 
     def parse_bytes(
         self,

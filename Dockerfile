@@ -6,30 +6,39 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Install system dependencies for document parsing and OCR
+# Install system dependencies for document parsing, OCR, and native builds
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    cmake \
     curl \
     git \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv for fast package management
+# Install uv package manager
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-# Copy project specification
-COPY pyproject.toml README.md* /app/
+# Copy dependency specifications first for Docker layer caching
+COPY pyproject.toml uv.lock* requirements.txt* packages.txt* README.md* /app/
 
-# Install dependencies
-RUN uv pip install --system -e .
+# Install dependencies into system environment
+RUN uv pip install --system -r requirements.txt || uv pip install --system .
 
-# Copy source code and download script
-COPY src /app/src
+# Copy configuration, static assets, scripts and application source code
+COPY config.toml /app/config.toml
+COPY assets /app/assets
 COPY scripts /app/scripts
+COPY src /app/src
 COPY app.py /app/app.py
 
-EXPOSE 7860 8000
+# Install docneedle package itself without re-fetching dependencies
+RUN uv pip install --system --no-deps .
 
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "7860"]
+EXPOSE 7860
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
+    CMD curl -f http://localhost:7860/healthz || exit 1
+
+# Start unified Gradio UI + FastAPI backend
+CMD ["python", "app.py"]

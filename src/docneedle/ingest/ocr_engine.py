@@ -150,7 +150,7 @@ def _extract_box_props(box: Any, text: str) -> BoundingBoxProps | None:
     try:
         xs = [float(pt[0]) for pt in box]
         ys = [float(pt[1]) for pt in box]
-    except TypeError, ValueError, IndexError:
+    except (TypeError, ValueError, IndexError):
         return None
 
     if len(xs) < 4 or len(ys) < 4:
@@ -292,11 +292,11 @@ def format_ocr_layout(boxes: Any, txts: Sequence[str]) -> str:
 
 
 class EphemeralRapidOCREngine:
-    """Manages ephemeral in-process RapidOCR inference with immediate RAM deallocation.
+    """Manages ephemeral in-process RapidOCR inference with immediate RAM/VRAM deallocation.
 
     Loads the ONNX Runtime detection, direction classification, and recognition models
     on entering context, performs zero-parameter multilingual transcription in RAM,
-    and frees all session references on exit.
+    and frees all session references and native memory on exit.
     """
 
     def __init__(self, text_score: float | None = None) -> None:
@@ -317,11 +317,13 @@ class EphemeralRapidOCREngine:
         params = {
             "Global.text_score": self.text_score,
             "Global.max_side_len": settings.ocr_longest_edge,
+            "Global.use_cls": False,
             "Det.model_type": det_tier,
             "Rec.model_type": rec_tier,
             "Det.limit_side_len": settings.ocr_det_limit_side_len,
             "Det.box_thresh": settings.ocr_det_box_thresh,
             "Det.unclip_ratio": settings.ocr_det_unclip_ratio,
+            "EngineConfig.onnxruntime.use_cuda": False,
         }
         try:
             self.ocr = RapidOCR(params=params)

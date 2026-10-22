@@ -735,3 +735,61 @@ class TestRefactoredExtractionHelpers:
         assert evidence.page == 3
         assert evidence.snippet == "Firma unvanı: ABC Bilişim A.Ş."
         assert conf >= 0.90
+
+
+class TestConfigTomlLoading:
+    """Test TOML configuration loading and resolution."""
+
+    def test_toml_section_and_flat_key_loading(self, tmp_path) -> None:
+        from docneedle.config import (
+            DocNeedleTomlConfigSettingsSource,
+            Settings,
+        )
+
+        test_toml = tmp_path / "custom_config.toml"
+        test_toml.write_text(
+            """
+[server]
+port = 9876
+app_name = "DocNeedle Test Suite"
+
+[hardware]
+gpu_enabled = true
+llm_n_gpu_layers = -1
+
+[ocr]
+longest_edge = 2400
+rec_model_type = "medium"
+"""
+        )
+
+        source = DocNeedleTomlConfigSettingsSource(Settings, toml_file=test_toml)
+        data = source._read_file(test_toml)
+
+        assert data["port"] == 9876
+        assert data["app_name"] == "DocNeedle Test Suite"
+        assert data["gpu_enabled"] is True
+        assert data["llm_n_gpu_layers"] == -1
+        assert data["ocr_longest_edge"] == 2400
+        assert data["ocr_rec_model_type"] == "medium"
+
+    def test_settings_loads_with_toml_source(self, monkeypatch, tmp_path) -> None:
+        from docneedle.config import Settings
+
+        test_toml = tmp_path / "config.toml"
+        test_toml.write_text(
+            """
+[server]
+port = 9123
+host = "127.0.0.1"
+
+[hardware]
+gpu_enabled = true
+"""
+        )
+
+        monkeypatch.setenv("CONFIG_TOML", str(test_toml))
+        s = Settings()
+        assert s.port == 9123
+        assert s.host == "127.0.0.1"
+        assert s.gpu_enabled is True

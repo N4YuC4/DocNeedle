@@ -1,4 +1,4 @@
-"""Local in-process Gemma 4 E2B QAT engine for thinking-enabled information extraction."""
+"""Local in-process Gemma 4 E2B QAT engine for information extraction."""
 
 import logging
 import re
@@ -364,6 +364,9 @@ class LocalGemmaEngine:
     """Manages in-process LLM (Ministral / Gemma) GGUF inference with thinking support."""
 
     def __init__(self, model_path: str | Path | None = None) -> None:
+        from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+        preload_cuda_runtime_libs()
         from llama_cpp import Llama
 
         if model_path is None:
@@ -374,11 +377,21 @@ class LocalGemmaEngine:
             raise FileNotFoundError(f"GGUF model file not found at: {self.model_path}")
 
         logger.info(f"Loading local LLM ({self.model_path.name}) from {self.model_path}...")
-        logits_all = False
         draft_model = None
         use_speculative = settings.llm_speculative_enabled and (
             settings.gpu_enabled or getattr(settings, "llm_speculative_cpu_enabled", False)
         )
+        # Prompt lookup decoding requires `logits_all=True`.
+        # On models with massive vocabularies (e.g. Gemma with 256k vocab), logits_all=True
+        # allocates 4.29 GB of RAM (n_tokens * 256k * 4 bytes).
+        # We only enable draft_model on standard vocabularies (<= 64k, e.g. Mistral)
+        # to prevent multi-gigabyte RAM/VRAM bloat.
+        if use_speculative and "gemma" in str(self.model_path).lower():
+            logger.info(
+                "Skipping speculative decoding for Gemma (vocab=256k) "
+            )
+            use_speculative = False
+
         if use_speculative:
             from llama_cpp.llama_speculative import LlamaPromptLookupDecoding
 
@@ -396,6 +409,8 @@ class LocalGemmaEngine:
                 settings.llm_speculative_max_ngram_size,
                 num_pred,
             )
+
+        logits_all = draft_model is not None
 
         llm_ctx = settings.llm_n_ctx
         if draft_model is not None and llm_ctx > 4096:
@@ -419,6 +434,12 @@ class LocalGemmaEngine:
             use_mlock=False,
             verbose=False,
         )
+        if not logits_all:
+            import numpy as np
+
+            # When logits_all=False and logprobs=None, llama-cpp-python never writes to or reads
+            # from self.scores (which otherwise pre-allocates n_batch * n_vocab * 4 bytes, ~536 MB).
+            self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
         self._lock = threading.Lock()
         logger.info(f"Local LLM ({self.model_path.name}) loaded successfully (n_ctx={self.n_ctx}).")
 

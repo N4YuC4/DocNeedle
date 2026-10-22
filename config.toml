@@ -1,0 +1,105 @@
+# ==============================================================================
+# DocNeedle Application & Pipeline Configuration (config.toml)
+# ==============================================================================
+# Privacy-first local RAG document extraction microservice.
+# Values can be overridden via OS environment variables (e.g. GPU_ENABLED=false).
+# ==============================================================================
+
+[server]
+app_name = "DocNeedle"
+app_version = "0.1.0"
+debug = false
+host = "0.0.0.0"
+port = 8000
+cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://docneedle.vercel.app",
+    "*"
+]
+
+[hardware]
+# Enable CUDA GPU offloading (auto-detected on HF Spaces ZeroGPU)
+gpu_enabled = true
+# -1 offloads all layers to GPU; 0 keeps execution on CPU
+llm_n_gpu_layers = -1
+model_n_batch = 512
+reranker_n_ctx = 2048
+# 8-bit quantized KV cache (GGML_TYPE_Q8_0) saves 50% context RAM
+model_kv_cache_type_k = 8
+model_kv_cache_type_v = 8
+model_flash_attn = true
+
+[ocr]
+enabled = true
+model_name = "RapidOCR (PP-OCRv6 Hybrid Det-Small / Rec-Small ONNX)"
+det_model_type = "small"
+rec_model_type = "small"
+text_score = 0.5
+longest_edge = 1200
+det_limit_side_len = 960
+det_box_thresh = 0.4
+det_unclip_ratio = 1.8
+max_ocr_pages = 5
+pdf_render_scale = 1.5
+pdf_embedded_text_min_chars = 50
+pdf_embedded_text_max_check_pages = 5
+fallback_min_chars = 30
+ingestion_cache_enabled = true
+
+[chunker]
+tokenizer_model = "Qwen/Qwen3-Reranker-0.6B"
+max_tokens = 768
+repeat_table_header = true
+merge_peers = true
+max_chunk_chars = 2500
+min_split_chars = 200
+overflow_factor = 1.25
+
+[bm25]
+k1 = 1.5
+b = 0.75
+top_k = 10
+
+[embedding]
+model = "microsoft/harrier-oss-v1-0.6b"
+quantization = "q4_k_m"
+dimension = 512
+batch_size = 4
+instruction = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: {text}"
+
+[retrieval]
+top_k = 10
+rrf_constant = 60
+reranker_enabled = true
+reranker_model = "Qwen/Qwen3-Reranker-0.6B"
+reranker_candidate_k = 10
+rerank_top_k = 5
+max_chunks_per_document = 2
+reranker_instruction = "Given a web search query, retrieve relevant passages that answer the query"
+
+[llm]
+model_name = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
+n_ctx = 16384
+temperature = 0.0
+top_p = 0.95
+max_tokens = 2048
+single_field_max_tokens = 128
+thinking_max_tokens = 512
+enable_thinking = false
+stop_tokens = ["</s>", "[/INST]", "[INST]", "<turn|>", "<end_of_turn>", "<|turn>"]
+# Prompt lookup speculative decoding for fast in-process token generation
+speculative_enabled = true
+speculative_cpu_enabled = false
+speculative_num_pred_tokens = 5
+speculative_max_ngram_size = 2
+
+[extraction]
+top_k = 5
+context_delimiter = "\n\n---\n\n"
+confidence_found_score = 0.95
+confidence_not_found_score = 0.0
+job_retention_minutes = 15
+model_storage_dir = "models"

@@ -1,0 +1,26 @@
+# Version Control & Environments
+.git
+.gitignore
+.venv
+venv/
+env/
+
+# Large Model Weights (Mounted via Volume)
+models/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Test & Linter Artifacts
+.pytest_cache/
+.ruff_cache/
+tests/
+
+# Environment Secrets
+.env
+.env.*

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -57,9 +58,11 @@ async def extract_from_documents(
         alias="schema",
         description="JSON string list of requested items to extract",
     ),
-    enable_reranker: bool = Form(
-        default=False,
-        description="Whether to run Qwen3 cross-encoder reranker on CPU (default: False)",
+    enable_reranker: bool | None = Form(
+        default=None,
+        description=(
+            "Whether to run Qwen3 cross-encoder reranker (defaults to settings.reranker_enabled)"
+        ),
     ),
 ) -> ExtractionResponse:
     """Extract structured data items from documents in a single privacy-preserving session."""
@@ -68,6 +71,7 @@ async def extract_from_documents(
 
     items = _parse_extraction_schema(items_schema)
     max_bytes = settings.max_upload_size_mb * 1024 * 1024
+    request_start = time.perf_counter()
     ingestion_service = IngestionService()
     extraction_service = ExtractionService()
     store = SessionVectorStore()
@@ -112,6 +116,8 @@ async def extract_from_documents(
         response = await extraction_service.extract_items(
             items=items, store=store, enable_reranker=enable_reranker
         )
+        total_time_ms = round((time.perf_counter() - request_start) * 1000.0, 2)
+        response.processing_time_ms = total_time_ms
         logger.info(
             f"[SESSION COMPLETE] Found {response.found_items}/{response.total_items} "
             f"in {response.processing_time_ms:.1f}ms"

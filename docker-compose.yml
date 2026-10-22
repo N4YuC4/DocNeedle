@@ -1,41 +1,25 @@
 services:
-  backend:
+  docneedle:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: docneedle-api
+    container_name: docneedle
     restart: unless-stopped
     ports:
       - "7860:7860"
-      - "8000:8000"
     environment:
       - HOST=0.0.0.0
       - PORT=7860
       - MODEL_STORAGE_DIR=/app/models
-      - LLM_SERVER_URL=http://llama-server:8080/v1
-      - CORS_ORIGINS=["http://localhost:3000","https://docneedle.vercel.app","*"]
+      - CONFIG_TOML=/app/config.toml
     volumes:
+      # Model weights stored on host to persist across container rebuilds
       - ./models:/app/models
-    depends_on:
-      - llama-server
-
-  llama-server:
-    image: ghcr.io/ggerganov/llama.cpp:server
-    container_name: docneedle-llm
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./models/llm:/models
-    command:
-      - "-m"
-      - "/models/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"
-      - "--host"
-      - "0.0.0.0"
-      - "--port"
-      - "8080"
-      - "-c"
-      - "8192"
-      - "--n-gpu-layers"
-      - "0"
-
+      # Pipeline configuration mounted read-only for live tuning
+      - ./config.toml:/app/config.toml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s

@@ -3,8 +3,8 @@ import re
 import threading
 from typing import Any
 
-from docling.datamodel.document import DoclingDocument
 from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
+from docling_core.types.doc.document import DoclingDocument
 
 from docneedle.config import settings
 from docneedle.ingest.models import DocumentChunk

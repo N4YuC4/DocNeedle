@@ -52,13 +52,19 @@ class Qwen3Reranker:
     """Reranker using Qwen3-Reranker-0.6B GGUF with llama.cpp."""
 
     def __init__(self, model_path: str | Path | None = None) -> None:
+        from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+        preload_cuda_runtime_libs()
         import llama_cpp
 
         if model_path is None:
             model_path = self._resolve_model_path()
 
         self.model_path = str(model_path)
-        logger.info(f"Loading Qwen3-Reranker from {self.model_path}")
+        logger.info(
+            f"Loading Qwen3-Reranker from {self.model_path} "
+            f"(gpu_layers={settings.effective_gpu_layers})"
+        )
         self.llm = llama_cpp.Llama(
             model_path=self.model_path,
             n_gpu_layers=settings.effective_gpu_layers,
@@ -74,6 +80,9 @@ class Qwen3Reranker:
             use_mlock=False,
             verbose=False,
         )
+        # Release the unused per-token vocabulary logits buffer in llama-cpp-python:
+        # score() reads logits directly from self.llm._ctx.get_logits() and never uses self.scores.
+        self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
         self.token_false_id = self.llm.tokenize(b"no", add_bos=False)[0]
         self.token_true_id = self.llm.tokenize(b"yes", add_bos=False)[0]
         self._lock = threading.Lock()

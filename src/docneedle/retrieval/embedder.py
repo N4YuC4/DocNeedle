@@ -29,13 +29,19 @@ class LlamaCppHarrierEmbedder(BaseEmbedder):
         model_path: str | Path,
         dimension: int | None = None,
     ) -> None:
+        from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+        preload_cuda_runtime_libs()
         import llama_cpp
 
         self.model_path = str(model_path)
         self.dimension = dimension if dimension is not None else settings.embedding_dimension
-        self.n_ctx = max(2048, settings.reranker_n_ctx)
-        eff_batch = max(settings.model_n_batch, 2048)
-        logger.info(f"Loading Harrier-OSS embedding from {self.model_path} (dim={self.dimension})")
+        self.n_ctx = max(1024, settings.chunker_max_tokens + 256)
+        eff_batch = max(settings.model_n_batch, self.n_ctx)
+        logger.info(
+            f"Loading Harrier-OSS embedding from {self.model_path} "
+            f"(dim={self.dimension}, gpu_layers={settings.effective_gpu_layers})"
+        )
         self.llm = llama_cpp.Llama(
             model_path=self.model_path,
             embedding=True,
@@ -52,6 +58,10 @@ class LlamaCppHarrierEmbedder(BaseEmbedder):
             use_mlock=False,
             verbose=False,
         )
+        # Release the unused per-token vocabulary logits buffer in llama-cpp-python:
+        # embed() reads sequence embeddings directly via llama_get_embeddings_seq()
+        # and never touches self.scores.
+        self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
         self._lock = threading.Lock()
 
     def _sanitize_prompt(self, prompt: str) -> str:
@@ -99,7 +109,11 @@ class LlamaCppHarrierEmbedder(BaseEmbedder):
         if not texts:
             return np.zeros((0, self.dimension), dtype=np.float32)
 
-        bs = settings.embedding_batch_size if batch_size is None else batch_size
+        # When running on GPU (effective_gpu_layers != 0), processing 1 sequence per
+        # decode call keeps the llama.cpp embeddings buffer to a single sequence (~700 MB
+        # lower host RSS) with identical throughput.
+        default_bs = 1 if settings.effective_gpu_layers != 0 else settings.embedding_batch_size
+        bs = default_bs if batch_size is None else batch_size
         results: list[np.ndarray] = []
         for i in range(0, len(texts), bs):
             batch = texts[i : i + bs]
@@ -160,6 +174,11 @@ class OnnxHarrierEmbedder(BaseEmbedder):
         sess_opts.intra_op_num_threads = settings.cpu_threads_batch
         sess_opts.inter_op_num_threads = 2
         sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Disable the CPU memory arena and memory-pattern planning: the arena grows to the
+        # largest (batch x seq^2) attention activation seen and never returns it to the OS,
+        # which pushed resident memory to 8+ GB on long chunks.
+        sess_opts.enable_cpu_mem_arena = False
+        sess_opts.enable_mem_pattern = False
 
         self.session = ort.InferenceSession(
             self.model_path,
@@ -238,8 +257,18 @@ def get_embedder() -> BaseEmbedder:
             return _embedder_instance
 
         base_dir = Path(settings.model_storage_dir)
+        quant = settings.embedding_quantization.upper()
+        gguf_model = base_dir / "embedding" / f"harrier-oss-v1-0.6b.{quant}.gguf"
 
-        # 1. Prefer ONNX model if present
+        # 1. When GPU acceleration is enabled, prefer GGUF via llama.cpp (native CUDA offload)
+        if settings.gpu_enabled and gguf_model.exists():
+            _embedder_instance = LlamaCppHarrierEmbedder(
+                model_path=gguf_model,
+                dimension=settings.embedding_dimension,
+            )
+            return _embedder_instance
+
+        # 2. Prefer ONNX model if present (CPU mode or when GGUF is absent)
         onnx_candidates = [
             base_dir / "embedding" / "harrier-onnx",
             base_dir / "embedding" / "onnx",
@@ -255,9 +284,7 @@ def get_embedder() -> BaseEmbedder:
                 )
                 return _embedder_instance
 
-        # 2. GGUF via llama.cpp
-        quant = settings.embedding_quantization.upper()
-        gguf_model = base_dir / "embedding" / f"harrier-oss-v1-0.6b.{quant}.gguf"
+        # 3. GGUF via llama.cpp (CPU mode when ONNX is absent)
         if gguf_model.exists():
             _embedder_instance = LlamaCppHarrierEmbedder(
                 model_path=gguf_model,

@@ -30,9 +30,11 @@ async def create_extraction_job(
         alias="schema",
         description="JSON string list of requested items to extract",
     ),
-    enable_reranker: bool = Form(
-        default=False,
-        description="Whether to run Qwen3 cross-encoder reranker on CPU (default: False)",
+    enable_reranker: bool | None = Form(
+        default=None,
+        description=(
+            "Whether to run Qwen3 cross-encoder reranker (defaults to settings.reranker_enabled)"
+        ),
     ),
 ) -> JobCreateResponse:
     """Submit an asynchronous extraction job.

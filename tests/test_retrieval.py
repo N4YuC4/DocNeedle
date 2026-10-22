@@ -166,11 +166,19 @@ def test_get_embedder_missing_model_raises_filenotfound(
 
 
 def test_onnx_harrier_embedder_lifecycle() -> None:
-    """Verify OnnxHarrierEmbedder text and query embedding, dimension, and L2 normalization."""
-    from docneedle.retrieval.embedder import OnnxHarrierEmbedder, get_embedder
+    """Verify Harrier embedder text and query embedding, dimension, and L2 normalization."""
+    from docneedle.config import settings
+    from docneedle.retrieval.embedder import (
+        LlamaCppHarrierEmbedder,
+        OnnxHarrierEmbedder,
+        get_embedder,
+    )
 
     emb = get_embedder()
-    assert isinstance(emb, OnnxHarrierEmbedder)
+    if settings.gpu_enabled:
+        assert isinstance(emb, LlamaCppHarrierEmbedder)
+    else:
+        assert isinstance(emb, OnnxHarrierEmbedder)
     texts = ["Ahmet Yılmaz", "Kira Sözleşmesi 25.000 TL", ""]
     embs = emb.embed_texts(texts)
     assert embs.shape == (3, 512)
@@ -181,3 +189,29 @@ def test_onnx_harrier_embedder_lifecycle() -> None:
     q_vec = emb.embed_query("Kira bedeli")
     assert q_vec.shape == (512,)
     assert abs(float(np.linalg.norm(q_vec)) - 1.0) < 1e-4
+
+
+def test_store_clear_reclaims_memory(
+    sample_chunks: list[DocumentChunk], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Verify that store.clear() frees memory and executes gc.collect()."""
+    import gc
+
+    gc_called = False
+
+    def mock_gc_collect():
+        nonlocal gc_called
+        gc_called = True
+        return 0
+
+    monkeypatch.setattr(gc, "collect", mock_gc_collect)
+
+    embedder = MockDeterministicEmbedder(dimension=128)
+    store = SessionVectorStore(embedder=embedder)
+    store.add_chunks(sample_chunks)
+
+    # store.clear() frees structures and calls gc.collect to reclaim native C memory
+    store.clear()
+    assert gc_called
+    assert len(store.chunks) == 0
+    assert store.embeddings is None

@@ -207,3 +207,29 @@ class TestEphemeralRapidOCRTranscription:
         with EphemeralRapidOCREngine() as ocr:
             text = ocr.transcribe_image(arr)
             assert text == ""
+
+    def test_ephemeral_engine_reclaims_memory_on_exit(self, monkeypatch) -> None:
+        import gc
+
+        gc_called = False
+
+        def mock_gc():
+            nonlocal gc_called
+            gc_called = True
+            return 0
+
+        monkeypatch.setattr(gc, "collect", mock_gc)
+
+        mock_output = MagicMock()
+        mock_output.boxes = None
+        mock_output.txts = ("TEST",)
+        monkeypatch.setattr(
+            "rapidocr.RapidOCR", MagicMock(return_value=MagicMock(return_value=mock_output))
+        )
+
+        with EphemeralRapidOCREngine() as ocr:
+            assert ocr.ocr is not None
+
+        # gc.collect MUST be called on exit to evict native ONNX session and tensors immediately
+        assert gc_called
+        assert ocr.ocr is None

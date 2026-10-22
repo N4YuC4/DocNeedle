@@ -1,8 +1,51 @@
 import os
+
+try:
+    import tomllib
+except ImportError:
+    import tomli as tomllib
 from pathlib import Path
+from typing import Any
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
+
+
+def _resolve_config_toml() -> Path | None:
+    """Resolve active config.toml path from environment, project root, or CWD."""
+    if "CONFIG_TOML" in os.environ:
+        custom_path = Path(os.environ["CONFIG_TOML"])
+        if custom_path.exists():
+            return custom_path
+    root_toml = Path(__file__).resolve().parent.parent.parent / "config.toml"
+    if root_toml.exists():
+        return root_toml
+    cwd_toml = Path(os.getcwd()) / "config.toml"
+    if cwd_toml.exists():
+        return cwd_toml
+    return None
+
+
+class DocNeedleTomlConfigSettingsSource(TomlConfigSettingsSource):
+    """TOML settings source that supports both sectioned tables and flat keys."""
+
+    def _read_file(self, file_path: Path) -> dict[str, Any]:
+        with open(file_path, "rb") as f:
+            data = tomllib.load(f)
+        flat: dict[str, Any] = {}
+        for section, content in data.items():
+            if isinstance(content, dict):
+                for k, v in content.items():
+                    flat[k] = v
+                    flat[f"{section}_{k}"] = v
+            else:
+                flat[section] = content
+        return flat
 
 
 def _resolve_model_dir() -> str:
@@ -64,6 +107,22 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        toml_path = _resolve_config_toml()
+        sources: list[PydanticBaseSettingsSource] = [init_settings, env_settings]
+        if toml_path is not None and toml_path.exists():
+            sources.append(DocNeedleTomlConfigSettingsSource(settings_cls, toml_file=toml_path))
+        sources.extend([dotenv_settings, file_secret_settings])
+        return tuple(sources)
+
     # 1. Server & Application
     app_name: str = "DocNeedle"
     app_version: str = "0.1.0"
@@ -101,7 +160,7 @@ class Settings(BaseSettings):
     ocr_det_limit_side_len: int = 960
     ocr_det_box_thresh: float = 0.4
     ocr_det_unclip_ratio: float = 1.8
-    max_ocr_pages: int = 15
+    max_ocr_pages: int = 5
     ocr_pdf_render_scale: float = 1.6
     pdf_embedded_text_min_chars: int = 50
     pdf_embedded_text_max_check_pages: int = 5
@@ -135,9 +194,16 @@ class Settings(BaseSettings):
     # 6. Hybrid Retrieval & Reranker
     retrieval_top_k: int = 10
     rrf_constant: int = 60
-    reranker_enabled: bool = False
+    reranker_enabled: bool = Field(
+        default_factory=lambda: (
+            bool(os.environ.get("SPACES_ZERO_GPU"))
+            or os.environ.get("SYSTEM") == "spaces"
+            or os.environ.get("GPU_ENABLED", "").lower() in ("1", "true")
+            or os.environ.get("RERANKER_ENABLED", "").lower() in ("1", "true")
+        )
+    )
     reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
-    reranker_candidate_k: int = 4
+    reranker_candidate_k: int = 10
     rerank_top_k: int = 5
     max_chunks_per_document: int = 2
     reranker_instruction: str = (
@@ -174,8 +240,15 @@ class Settings(BaseSettings):
     confidence_not_found_score: float = 0.0
     job_retention_minutes: int = 15
 
-    # 8. Hardware & Performance Acceleration (CPU-optimized for HF Spaces by default)
-    gpu_enabled: bool = False
+    # 8. Hardware & Performance Acceleration (GPU-accelerated when on ZeroGPU or GPU_ENABLED=1)
+    gpu_enabled: bool = Field(
+        default_factory=lambda: (
+            bool(os.environ.get("SPACES_ZERO_GPU"))
+            or os.environ.get("SYSTEM") == "spaces"
+            or os.environ.get("GPU_ENABLED", "").lower() in ("1", "true")
+            or False
+        )
+    )
     llm_n_gpu_layers: int = 0
     cpu_threads: int = Field(default_factory=_default_cpu_threads)
     cpu_threads_batch: int = Field(default_factory=_default_cpu_threads_batch)
@@ -195,6 +268,11 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-if not settings.gpu_enabled and "CUDA_VISIBLE_DEVICES" not in os.environ:
-    # Disable broken/absent CUDA runtime offload when running in CPU-only mode
+if (
+    not settings.gpu_enabled
+    and "CUDA_VISIBLE_DEVICES" not in os.environ
+    and not os.environ.get("SPACES_ZERO_GPU")
+    and os.environ.get("SYSTEM") != "spaces"
+):
+    # Disable broken/absent CUDA runtime offload when running in local CPU-only mode
     os.environ["CUDA_VISIBLE_DEVICES"] = ""

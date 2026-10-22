@@ -15,6 +15,19 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+# ZeroGPU decorator compatibility (applied before CUDA imports)
+try:
+    import spaces
+
+    gpu_decorator = spaces.GPU
+except (ImportError, Exception):
+
+    def gpu_decorator(*args, **kwargs):
+        if args and callable(args[0]):
+            return args[0]
+        return lambda f: f
+
+
 # Add src and root to sys.path
 root_dir = Path(__file__).resolve().parent
 src_dir = root_dir / "src"
@@ -23,10 +36,18 @@ if src_dir.exists():
     sys.path.insert(0, str(src_dir))
 sys.path.insert(0, str(root_dir))
 
+# Preload NVIDIA CUDA runtime and cuBLAS shared libraries into global symbol space
+# (libcudart.so.12, libcublas.so.12) to ensure llama-cpp-python can link on ZeroGPU
+try:
+    from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+    preload_cuda_runtime_libs()
+except Exception as e:
+    logging.getLogger("DocNeedleSpace").debug("CUDA runtime preload info: %s", e)
+
 import gradio as gr  # noqa: E402
 
 from docneedle.config import settings  # noqa: E402
-from docneedle.main import app as fastapi_app  # noqa: E402
 
 logger = logging.getLogger("DocNeedleSpace")
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +60,22 @@ try:
     ensure_all_models_present(settings.model_storage_dir)
 except Exception as e:
     logger.warning(f"Automatic model download check failed or bypassed: {e}")
+
+try:
+    from rapidocr import ModelType, RapidOCR
+
+    logger.info("Pre-warming RapidOCR models...")
+    _det = ModelType(settings.ocr_det_model_type.lower())
+    _rec = ModelType(settings.ocr_rec_model_type.lower())
+    _ = RapidOCR(
+        params={
+            "Det.model_type": _det,
+            "Rec.model_type": _rec,
+            "EngineConfig.onnxruntime.use_cuda": False,
+        }
+    )
+except Exception as e:
+    logger.warning("RapidOCR model pre-warm check bypassed: %s", e)
 
 
 CUSTOM_CSS = """
@@ -589,18 +626,24 @@ def make_status_html(message: str, is_success: bool = False, is_loading: bool = 
     """
 
 
-async def perform_extraction_ui(
+async def _async_perform_extraction_ui(
     files: Any,
     session_chunks: list[Any] | None,
     active_tab: str,
     raw_json: str,
     vis: list[bool],
     *field_args: Any,
+    start_time: float | None = None,
 ) -> tuple[str, dict[str, Any], list[Any], str]:
     """Execute complete document extraction pipeline from dynamic Gradio UI fields or raw JSON schema.
 
     Uses initial OCR/ingested chunks from session state to avoid redundant OCR runs on queries.
     """
+    import time
+
+    if start_time is None:
+        start_time = time.perf_counter()
+
     if not files and not session_chunks:
         err = {"error": "Please upload at least one document (PDF, DOCX, XLSX, or Image)."}
         return (
@@ -683,6 +726,13 @@ async def perform_extraction_ui(
             make_status_html("Please define at least one field to extract.", is_success=False),
         )
 
+    try:
+        from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+        preload_cuda_runtime_libs()
+    except Exception:
+        pass
+
     ingest_svc = IngestionService()
     extraction_svc = ExtractionService()
     store = SessionVectorStore()
@@ -709,11 +759,6 @@ async def perform_extraction_ui(
                 ),
             )
 
-        # Reclaim RAM between ingestion and retrieval
-        import gc
-
-        gc.collect()
-
         logger.info(
             f"--> [PIPELINE] Indexing {len(chunks_to_use)} text chunks across {len(file_list)} files into in-memory vector store..."
         )
@@ -723,10 +768,13 @@ async def perform_extraction_ui(
         )
         response = await extraction_svc.extract_items(queries, store)
         resp_dict = response.model_dump()
+        total_time_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+        resp_dict["processing_time_ms"] = total_time_ms
+        time_s = f"{total_time_ms / 1000:.2f} s"
         status_msg = (
             f"Extraction complete: {resp_dict.get('found_items', 0)} of "
             f"{resp_dict.get('total_items', 0)} items found in "
-            f"{resp_dict.get('processing_time_ms', 0):.0f} ms."
+            f"{time_s} ({total_time_ms:.0f} ms)."
         )
 
         return (
@@ -749,6 +797,60 @@ async def perform_extraction_ui(
         import gc
 
         gc.collect()
+        if "torch" in sys.modules:
+            try:
+                import torch
+
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+
+@gpu_decorator(duration=120)
+def perform_extraction_ui(
+    files: Any,
+    session_chunks: list[Any] | None,
+    active_tab: str,
+    raw_json: str,
+    vis: list[bool],
+    *field_args: Any,
+) -> tuple[str, dict[str, Any], list[Any], str]:
+    """Execute complete document extraction pipeline from dynamic Gradio UI fields or raw JSON schema."""
+    import asyncio
+    import concurrent.futures
+    import time
+
+    start_time = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        results_html, resp_dict, chunks_to_use, status_html = pool.submit(
+            asyncio.run,
+            _async_perform_extraction_ui(
+                files,
+                session_chunks,
+                active_tab,
+                raw_json,
+                vis,
+                *field_args,
+                start_time=start_time,
+            ),
+        ).result()
+
+    total_time_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
+    if isinstance(resp_dict, dict) and "results" in resp_dict:
+        resp_dict["processing_time_ms"] = total_time_ms
+        results_html = render_results_html(resp_dict)
+        time_s = f"{total_time_ms / 1000:.2f} s"
+        found = resp_dict.get("found_items", 0)
+        total = resp_dict.get("total_items", 0)
+        status_msg = (
+            f"Extraction complete: {found} of "
+            f"{total} items found in "
+            f"{time_s} ({total_time_ms:.0f} ms)."
+        )
+        status_html = make_status_html(status_msg, is_success=True)
+
+    return results_html, resp_dict, chunks_to_use, status_html
 
 
 def check_system_health() -> dict[str, Any]:
@@ -924,7 +1026,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
             with gr.Accordion("⚙️ System Health & API Info", open=False):
                 health_btn = gr.Button("Check System Health", size="sm")
                 health_json = gr.JSON(label="System Details")
-                health_btn.click(check_system_health, outputs=health_json, api_name=False)
+                health_btn.click(check_system_health, outputs=health_json, api_name=False, queue=False)
                 gr.Markdown(
                     """
                     * **Swagger API Documentation:** [/docs](/docs)
@@ -947,6 +1049,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[vis_state],
         outputs=[vis_state] + field_groups,
         api_name=False,
+        queue=False,
     )
 
     def make_delete_handler(target_idx: int):
@@ -969,6 +1072,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
             inputs=[vis_state],
             outputs=[vis_state, field_groups[idx], q_inputs[idx], k_inputs[idx], t_inputs[idx]],
             api_name=False,
+            queue=False,
         )
 
     def on_clear_all() -> list[Any]:
@@ -999,6 +1103,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         on_clear_all,
         outputs=[vis_state] + field_groups + q_inputs + k_inputs + t_inputs + [raw_json_input],
         api_name=False,
+        queue=False,
     )
 
     def on_sync_form_to_raw(vis: list[bool], *field_args: Any) -> str:
@@ -1013,6 +1118,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[vis_state] + q_inputs + k_inputs + t_inputs,
         outputs=[raw_json_input],
         api_name=False,
+        queue=False,
     )
 
     def on_apply_raw_to_form(raw_json: str) -> tuple[Any, ...]:
@@ -1033,6 +1139,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[raw_json_input],
         outputs=[vis_state] + field_groups + q_inputs + k_inputs + t_inputs,
         api_name=False,
+        queue=False,
     )
 
     def on_import_schema(file: Any) -> tuple[Any, ...]:
@@ -1057,6 +1164,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[import_schema_btn],
         outputs=[vis_state] + field_groups + q_inputs + k_inputs + t_inputs + [raw_json_input],
         api_name=False,
+        queue=False,
     )
 
     def on_export_schema(
@@ -1119,9 +1227,10 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[active_tab_state, raw_json_input, vis_state] + q_inputs + k_inputs + t_inputs,
         outputs=[export_schema_btn],
         api_name=False,
+        queue=False,
     )
 
-    tab_form_input.select(lambda: "form", outputs=[active_tab_state], api_name=False)
+    tab_form_input.select(lambda: "form", outputs=[active_tab_state], api_name=False, queue=False)
 
     def on_select_raw_tab(vis: list[bool], *field_args: Any) -> tuple[str, str]:
         num_fields = MAX_FIELDS
@@ -1136,6 +1245,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[vis_state] + q_inputs + k_inputs + t_inputs,
         outputs=[active_tab_state, raw_json_input],
         api_name=False,
+        queue=False,
     )
 
     def on_documents_changed(files: Any) -> tuple[str, list[Any]]:
@@ -1176,6 +1286,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         inputs=[file_input],
         outputs=[doc_status_view, session_chunks_state],
         api_name=False,
+        queue=False,
     )
 
     extract_btn.click(
@@ -1194,17 +1305,48 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         api_name=False,
     )
 
-# 3. Mount Gradio to root path with footer_links=[] to completely remove auto-generated API footer
-if "pytest" not in sys.modules:
-    fastapi_app.router.routes = [
-        r for r in fastapi_app.router.routes if getattr(r, "path", None) != "/"
-    ]
-    app = gr.mount_gradio_app(fastapi_app, demo, path="/", css=CUSTOM_CSS, footer_links=[])
-else:
-    app = fastapi_app
+    # ZeroGPU keepalive and compatibility handler
+    try:
+
+        @gpu_decorator(duration=60)
+        def _zerogpu_compat_probe() -> str:
+            return ""
+
+        _zg_btn = gr.Button("ZeroGPU Init", visible=False)
+        _zg_btn.click(_zerogpu_compat_probe, outputs=[], api_name=False)
+    except Exception:
+        pass
+
+# 3. Mount complete FastAPI REST API onto Gradio App
+from gradio.routes import App  # noqa: E402
+
+from docneedle.api.routes_extract import router as extract_router  # noqa: E402
+from docneedle.api.routes_jobs import router as jobs_router  # noqa: E402
+from docneedle.main import health_check  # noqa: E402
+
+gradio_app = App(
+    title=settings.app_name,
+    version=settings.app_version,
+    description="Privacy-first local RAG document extraction microservice",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
+gradio_app.include_router(extract_router)
+gradio_app.include_router(jobs_router)
+gradio_app.add_api_route("/healthz", health_check, methods=["GET"])
+gradio_app.add_api_route("/health", health_check, methods=["GET"])
+
+# Mount Gradio dashboard onto root path for external ASGI runners (e.g. uvicorn app:app)
+app = gr.mount_gradio_app(gradio_app, demo, path="/")
 
 if __name__ == "__main__":
-    import uvicorn
-
     port = int(os.environ.get("PORT", 7860))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    logger.info(f"--> [STARTUP] Starting DocNeedle on 0.0.0.0:{port}...")
+    demo.launch(
+        _app=gradio_app,
+        server_name="0.0.0.0",
+        server_port=port,
+        footer_links=[],
+        css=CUSTOM_CSS,
+        ssr_mode=False,
+    )

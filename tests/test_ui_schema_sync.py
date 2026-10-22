@@ -151,3 +151,27 @@ def test_import_file_parsing(tmp_path: Path):
     assert new_vis[1] is True
     assert new_vis[2] is False
     assert json.loads(json_str)[0]["key"] == "inv_no"
+
+
+def test_perform_extraction_ui_measures_end_to_end_time():
+    import asyncio
+    from unittest.mock import patch
+
+    from app import perform_extraction_ui
+
+    async def mock_async_extract(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return (
+            "<div>Mock HTML</div>",
+            {"total_items": 1, "found_items": 1, "processing_time_ms": 1.0, "results": []},
+            [],
+            "Status",
+        )
+
+    with patch("app._async_perform_extraction_ui", side_effect=mock_async_extract):
+        html_out, resp_dict, _, status = perform_extraction_ui(
+            None, [], "form", "", [True], "test_q", *([""] * 29)
+        )
+        assert resp_dict.get("processing_time_ms") >= 45.0
+        assert "Processing Time" in html_out
+        assert "Extraction complete: 1 of 1 items found" in status
