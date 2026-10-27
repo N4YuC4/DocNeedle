@@ -2,10 +2,12 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include <cstdio>
-#include <vector>
+#include <cstdint>
 #include <cstring>
 #include <string>
+#include <vector>
 #include <mutex>
+#include <dlfcn.h>
 
 struct docneedle_embed_ctx {
     llama_model * model;
@@ -31,6 +33,30 @@ static void normalize_l2(float * vec, int dim) {
     }
 }
 
+// Binary ABI struct matching libllama.so layout without the 8-byte lazy_mode shift
+// present in newer llama.h headers. This prevents tensor_split / progress_callback
+// pointer corruption during llama_model_load_from_file.
+struct libllama_model_params {
+    void * devices;
+    void * tensor_buft_overrides;
+    int32_t n_gpu_layers;
+    int32_t split_mode;
+    int32_t main_gpu;
+    int32_t load_mode;
+    const float * tensor_split;
+    void * progress_callback;
+    void * progress_callback_user_data;
+    void * kv_overrides;
+    bool vocab_only;
+    bool use_mmap;
+    bool use_mlock;
+    bool check_tensors;
+    char pad[12];
+};
+
+typedef struct libllama_model_params (*model_default_params_fn_t)();
+typedef llama_model * (*model_load_from_file_fn_t)(const char *, struct libllama_model_params);
+
 extern "C" {
 
 void * docneedle_embed_init(
@@ -42,9 +68,19 @@ void * docneedle_embed_init(
 ) {
     llama_backend_init();
 
-    llama_model_params mparams = llama_model_default_params();
+    auto default_params_fn = (model_default_params_fn_t)dlsym(RTLD_DEFAULT, "llama_model_default_params");
+    auto load_from_file_fn = (model_load_from_file_fn_t)dlsym(RTLD_DEFAULT, "llama_model_load_from_file");
+
+    if (!default_params_fn || !load_from_file_fn) {
+        return nullptr;
+    }
+
+    struct libllama_model_params mparams = default_params_fn();
     mparams.n_gpu_layers = n_gpu_layers;
-    llama_model * model = llama_model_load_from_file(model_path, mparams);
+    mparams.progress_callback = nullptr;
+    mparams.progress_callback_user_data = nullptr;
+
+    llama_model * model = load_from_file_fn(model_path, mparams);
     if (!model) {
         return nullptr;
     }

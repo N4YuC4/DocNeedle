@@ -61,7 +61,7 @@ def _embedder_worker_loop(
             model_path=model_path,
             mmproj_path=mmproj_path,
             dimension=dimension,
-            n_gpu_layers=n_gpu_layers,
+            n_gpu_layers=n_gpu_layers or 0,
         )
         pipe.send(("READY", None))
     except Exception as e:

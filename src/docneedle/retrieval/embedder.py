@@ -52,16 +52,14 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         dimension: int | None = None,
         n_gpu_layers: int | None = None,
     ) -> None:
-        from docneedle.cuda_compat import preload_cuda_runtime_libs
-
-        preload_cuda_runtime_libs()
-
         self.model_path = str(model_path)
         self.mmproj_path = str(mmproj_path)
         self.dimension = dimension if dimension is not None else settings.embedding_dimension
-        self.n_gpu_layers = (
-            n_gpu_layers if n_gpu_layers is not None else settings.effective_gpu_layers
-        )
+        self.n_gpu_layers = n_gpu_layers if n_gpu_layers is not None else 0
+        if self.n_gpu_layers != 0:
+            from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+            preload_cuda_runtime_libs()
         self.n_ctx = max(2048, settings.chunker_max_tokens + 256)
 
         logger.info(
@@ -237,6 +235,6 @@ def get_embedder() -> BaseEmbedder:
             model_path=model_path,
             mmproj_path=mmproj_path,
             dimension=settings.embedding_dimension,
-            n_gpu_layers=settings.effective_gpu_layers,
+            n_gpu_layers=0,
         )
         return _embedder_instance
