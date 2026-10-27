@@ -16,6 +16,7 @@ class DocumentChunk(BaseModel):
     page_number: int | None = None
     heading: str | None = None
     is_table: bool = False
+    image_bytes: bytes | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

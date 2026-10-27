@@ -7,7 +7,7 @@ except ImportError:
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -127,6 +127,14 @@ class Settings(BaseSettings):
     app_name: str = "DocNeedle"
     app_version: str = "0.1.0"
     debug: bool = False
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug_field(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.lower() in ("1", "true", "yes", "on", "debug")
+        return bool(v)
+
     host: str = "0.0.0.0"
     port: int = 8000
     cors_origins: list[str] = Field(
@@ -148,24 +156,11 @@ class Settings(BaseSettings):
         r")(:\d+)?$"
     )
 
-    # 2. Ingestion & Document Parser (RapidOCR & PDF inspection)
+    # 2. Ingestion & Document Parser (OCR-Free Visual & Digital Text Ingestion)
     model_storage_dir: str = Field(default_factory=_resolve_model_dir)
     max_upload_size_mb: int = 50
-    ocr_enabled: bool = True
-    ocr_use_cuda: bool = True
-    ocr_gpu_device_id: int = 0
-    ocr_rec_batch_num: int = 16
-    ocr_cuda_conv_algo_search: str = "HEURISTIC"
-    ocr_cuda_arena_extend_strategy: str = "kSameAsRequested"
-    ocr_model_name: str = "RapidOCR (PP-OCRv6 Det-Small / Rec-Small ONNX)"
-    ocr_det_model_type: str = "small"
-    ocr_rec_model_type: str = "small"
-    ocr_text_score: float = 0.5
-    ocr_longest_edge: int = 1000
-    ocr_det_limit_side_len: int = 960
-    ocr_det_box_thresh: float = 0.4
-    ocr_det_unclip_ratio: float = 1.8
-    ocr_pdf_render_scale: float = 1.6
+    ocr_enabled: bool = False
+    pdf_render_scale: float = 1.5
     pdf_embedded_text_min_chars: int = 50
     pdf_embedded_text_max_check_pages: int = 5
     ocr_fallback_min_chars: int = 30
@@ -185,15 +180,13 @@ class Settings(BaseSettings):
     bm25_b: float = 0.75
     bm25_top_k: int = 10
 
-    # 5. Vector Embedding (Harrier-OSS-v1-0.6B Q4_K_M GGUF)
-    embedding_model: str = "microsoft/harrier-oss-v1-0.6b"
-    embedding_quantization: str = "q4_k_m"
-    embedding_dimension: int = 512
+    # 5. Vector Embedding (EmbeddingGemma-2 UD-Q4_K_XL GGUF + mmproj-F16 Cross-Modal)
+    embedding_model: str = "unsloth/embeddinggemma-2-GGUF"
+    embedding_quantization: str = "ud-q4_k_xl"
+    embedding_dimension: int = 768
     embedding_batch_size: int = 4
-    embedding_instruction: str = (
-        "Instruct: Given a web search query, retrieve relevant passages that answer the query\n"
-        "Query: {text}"
-    )
+    embedding_instruction: str = "task: search result | query: {text}"
+    embedding_doc_instruction: str = "title: {doc_name} | text: {text}"
 
     # 6. Hybrid Retrieval & Reranker
     retrieval_top_k: int = 10
@@ -218,6 +211,7 @@ class Settings(BaseSettings):
     extraction_top_k: int = 5
     extraction_context_delimiter: str = "\n\n---\n\n"
     llm_model_name: str = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
+    llm_mmproj_name: str = "mmproj-F16"
     llm_n_ctx: int = 16384
     llm_temperature: float = 0.0
     llm_top_p: float = 0.95
@@ -234,6 +228,12 @@ class Settings(BaseSettings):
         "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', first name is 'TOLGA').\n"
         "   - For surname ('soyad' / 'soyisim'), extract ONLY the family surname "
         "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', surname is 'ARSLAN').\n"
+        "   - For passport number ('pasaport no' / 'passport no'), extract the standard "
+        "9-character passport number (e.g., 'U30154391'), not the bottom MRZ optical code.\n"
+        "   - When Expected Data Type is 'boolean', reply strictly 'Yes' if the requested entity "
+        "or item is present, or 'No' / 'Not found' if it is not. NEVER output numbers or IDs.\n"
+        "   - For address or location ('adres' / 'konum'), extract strictly the physical address "
+        "or city without document dates, timestamps, or header metadata.\n"
         "   - NEVER concatenate adjacent column values, parent names ('baba adı', 'ana adı'), "
         "gender, dates, or locations into the person's name.\n"
     )

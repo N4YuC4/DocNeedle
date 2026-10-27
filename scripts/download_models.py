@@ -12,14 +12,23 @@ import urllib.request
 
 MODELS_CONFIG = {
     "embedding": {
-        "name": "harrier-oss-v1-0.6b.Q4_K_M",
-        "repo_id": "mradermacher/harrier-oss-v1-0.6b-GGUF",
-        "filename": "harrier-oss-v1-0.6b.Q4_K_M.gguf",
+        "name": "embeddinggemma-2-UD-Q4_K_XL",
+        "repo_id": "unsloth/embeddinggemma-2-GGUF",
+        "filename": "embeddinggemma-2-UD-Q4_K_XL.gguf",
         "url": (
-            "https://huggingface.co/mradermacher/harrier-oss-v1-0.6b-GGUF/resolve/main/"
-            "harrier-oss-v1-0.6b.Q4_K_M.gguf"
+            "https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/"
+            "embeddinggemma-2-UD-Q4_K_XL.gguf"
         ),
-        "subpath": os.path.join("embedding", "harrier-oss-v1-0.6b.Q4_K_M.gguf"),
+        "subpath": os.path.join("embedding", "embeddinggemma-2-UD-Q4_K_XL.gguf"),
+    },
+    "embedding_mmproj": {
+        "name": "embeddinggemma-2-mmproj-F16",
+        "repo_id": "unsloth/embeddinggemma-2-GGUF",
+        "filename": "mmproj-F16.gguf",
+        "url": (
+            "https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-F16.gguf"
+        ),
+        "subpath": os.path.join("embedding", "mmproj-F16.gguf"),
     },
     "reranker": {
         "name": "Qwen3-Reranker-0.6B.Q4_K_M",
@@ -40,6 +49,15 @@ MODELS_CONFIG = {
             "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"
         ),
         "subpath": os.path.join("llm", "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+    },
+    "llm_mmproj": {
+        "name": "gemma-4-E2B-it-mmproj-F16",
+        "repo_id": "unsloth/gemma-4-E2B-it-qat-GGUF",
+        "filename": "mmproj-F16.gguf",
+        "url": (
+            "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/mmproj-F16.gguf"
+        ),
+        "subpath": os.path.join("llm", "mmproj-F16.gguf"),
     },
 }
 
@@ -103,48 +121,25 @@ def download_file(
     print("\n  Download complete.")
 
 
-def download_onnx_embedding_model(models_dir: str) -> None:
-    """Download Harrier-OSS-v1-0.6B ONNX Q4 model and tokenizer from onnx-community."""
-    from huggingface_hub import hf_hub_download
-
-    dest_dir = os.path.join(models_dir, "embedding", "harrier-onnx")
-    os.makedirs(dest_dir, exist_ok=True)
-    repo_id = "onnx-community/harrier-oss-v1-0.6b-ONNX"
-
-    files = [
-        "onnx/model_q4.onnx",
-        "onnx/model_q4.onnx_data",
-        "tokenizer.json",
-        "tokenizer_config.json",
-    ]
-    print(f"\nChecking/Downloading Harrier-OSS ONNX model into {dest_dir}...")
-    for f in files:
-        target = os.path.join(dest_dir, f)
-        if not os.path.exists(target):
-            print(f"  Downloading {f}...")
-            hf_hub_download(repo_id=repo_id, filename=f, local_dir=dest_dir)
-        else:
-            print(f"  {f} already exists.")
-
-
-def download_embedding_model(models_dir: str) -> None:
-    """Download Harrier-OSS-v1-0.6B Q4_K_M GGUF."""
-    cfg = MODELS_CONFIG["embedding"]
-    dest_path = os.path.join(models_dir, cfg["subpath"])
-    print(f"\n[1/3] Checking/Downloading {cfg['name']} into {dest_path}...")
-    download_file(
-        cfg["url"],
-        dest_path,
-        repo_id=cfg.get("repo_id"),
-        filename=cfg.get("filename"),
-    )
+def download_embedding_models(models_dir: str) -> None:
+    """Download EmbeddingGemma-2 GGUF model and SigLIP vision projector."""
+    for key in ("embedding", "embedding_mmproj"):
+        cfg = MODELS_CONFIG[key]
+        dest_path = os.path.join(models_dir, cfg["subpath"])
+        print(f"\nChecking/Downloading {cfg['name']} into {dest_path}...")
+        download_file(
+            cfg["url"],
+            dest_path,
+            repo_id=cfg.get("repo_id"),
+            filename=cfg.get("filename"),
+        )
 
 
 def download_reranker_model(models_dir: str) -> None:
     """Download Qwen3-Reranker-0.6B Q4_K_M GGUF."""
     cfg = MODELS_CONFIG["reranker"]
     dest_path = os.path.join(models_dir, cfg["subpath"])
-    print(f"\n[2/3] Checking/Downloading {cfg['name']} into {dest_path}...")
+    print(f"\nChecking/Downloading {cfg['name']} into {dest_path}...")
     download_file(
         cfg["url"],
         dest_path,
@@ -153,69 +148,18 @@ def download_reranker_model(models_dir: str) -> None:
     )
 
 
-def download_llm_model(models_dir: str) -> None:
-    """Download Gemma-4-E2B-it-qat-UD-Q4_K_XL GGUF."""
-    cfg = MODELS_CONFIG["llm"]
-    dest_path = os.path.join(models_dir, cfg["subpath"])
-    print(f"\n[3/3] Checking/Downloading {cfg['name']} into {dest_path}...")
-    download_file(
-        cfg["url"],
-        dest_path,
-        repo_id=cfg.get("repo_id"),
-        filename=cfg.get("filename"),
-    )
-
-
-def download_rapidocr_models() -> None:
-    """Pre-download RapidOCR detection and recognition ONNX models without importing onnxruntime."""
-    try:
-        from pathlib import Path
-
-        import rapidocr
-        from rapidocr.inference_engine.base import FileInfo
-        from rapidocr.utils.download_models import download_task
-        from rapidocr.utils.typings import (
-            EngineType,
-            LangDet,
-            LangRec,
-            ModelType,
-            OCRVersion,
-            TaskType,
+def download_llm_models(models_dir: str) -> None:
+    """Download Gemma-4 E2B-IT GGUF LLM and mmproj vision projector."""
+    for key in ("llm", "llm_mmproj"):
+        cfg = MODELS_CONFIG[key]
+        dest_path = os.path.join(models_dir, cfg["subpath"])
+        print(f"\nChecking/Downloading {cfg['name']} into {dest_path}...")
+        download_file(
+            cfg["url"],
+            dest_path,
+            repo_id=cfg.get("repo_id"),
+            filename=cfg.get("filename"),
         )
-
-        print("\nChecking/Downloading RapidOCR PP-OCRv6 models...")
-        ocr_models_dir = Path(rapidocr.__file__).resolve().parent / "models"
-        ocr_models_dir.mkdir(parents=True, exist_ok=True)
-        for model_tier in (ModelType.SMALL, ModelType.MEDIUM):
-            try:
-                download_task(
-                    ocr_models_dir,
-                    FileInfo(
-                        EngineType.ONNXRUNTIME,
-                        OCRVersion.PPOCRV6,
-                        TaskType.DET,
-                        LangDet.CH,
-                        model_tier,
-                    ),
-                )
-            except ValueError:
-                pass
-            try:
-                download_task(
-                    ocr_models_dir,
-                    FileInfo(
-                        EngineType.ONNXRUNTIME,
-                        OCRVersion.PPOCRV6,
-                        TaskType.REC,
-                        LangRec.CH,
-                        model_tier,
-                    ),
-                )
-            except ValueError:
-                pass
-        print("RapidOCR models are verified and present.")
-    except Exception as e:
-        print(f"RapidOCR models check bypassed: {e}")
 
 
 def download_chunker_tokenizer(tokenizer_model: str = "Qwen/Qwen3-Reranker-0.6B") -> None:
@@ -245,7 +189,6 @@ def ensure_all_models_present(models_dir: str | None = None) -> None:
                 repo_id=cfg.get("repo_id"),
                 filename=cfg.get("filename"),
             )
-    download_rapidocr_models()
     download_chunker_tokenizer()
 
 
@@ -259,7 +202,7 @@ def main() -> None:
     parser.add_argument(
         "--embedding",
         action="store_true",
-        help="Download only Harrier-OSS-v1-0.6B Q4_K_M GGUF",
+        help="Download only EmbeddingGemma-2 GGUF & SigLIP vision projector",
     )
     parser.add_argument(
         "--reranker",
@@ -269,29 +212,22 @@ def main() -> None:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Download only Gemma-4-E2B-it-qat-UD-Q4_K_XL GGUF",
-    )
-    parser.add_argument(
-        "--onnx",
-        action="store_true",
-        help="Download Harrier-OSS-v1-0.6B ONNX Q4 model and tokenizer",
+        help="Download only Gemma-4-E2B-it GGUF & vision projector",
     )
 
     args = parser.parse_args()
-    download_all = not args.embedding and not args.reranker and not args.llm and not args.onnx
+    download_all = not args.embedding and not args.reranker and not args.llm
 
     if download_all or args.embedding:
-        download_embedding_model(args.models_dir)
-
-    if download_all or args.onnx:
-        download_onnx_embedding_model(args.models_dir)
+        download_embedding_models(args.models_dir)
 
     if download_all or args.reranker:
         download_reranker_model(args.models_dir)
 
     if download_all or args.llm:
-        download_llm_model(args.models_dir)
+        download_llm_models(args.models_dir)
 
+    download_chunker_tokenizer()
     print("\nAll requested model downloads are complete.")
 
 

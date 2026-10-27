@@ -32,25 +32,10 @@ model_kv_cache_type_k = 8
 model_kv_cache_type_v = 8
 model_flash_attn = true
 
-[ocr]
-enabled = true
-use_cuda = true
-gpu_device_id = 0
-rec_batch_num = 16
-cuda_conv_algo_search = "HEURISTIC"
-cuda_arena_extend_strategy = "kSameAsRequested"
-model_name = "RapidOCR (PP-OCRv6 Hybrid Det-Small / Rec-Small ONNX)"
-det_model_type = "small"
-rec_model_type = "small"
-text_score = 0.5
-longest_edge = 1200
-det_limit_side_len = 960
-det_box_thresh = 0.4
-det_unclip_ratio = 1.8
+[ingest]
 pdf_render_scale = 1.5
 pdf_embedded_text_min_chars = 50
 pdf_embedded_text_max_check_pages = 5
-fallback_min_chars = 30
 ingestion_cache_enabled = true
 
 [chunker]
@@ -68,11 +53,12 @@ b = 0.75
 top_k = 10
 
 [embedding]
-model = "microsoft/harrier-oss-v1-0.6b"
-quantization = "q4_k_m"
-dimension = 512
+model = "unsloth/embeddinggemma-2-GGUF"
+quantization = "ud-q4_k_xl"
+dimension = 768
 batch_size = 4
-instruction = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: {text}"
+instruction = "task: search result | query: {text}"
+doc_instruction = "title: {doc_name} | text: {text}"
 
 [retrieval]
 top_k = 10
@@ -86,6 +72,7 @@ reranker_instruction = "Given a web search query, retrieve relevant passages tha
 
 [llm]
 model_name = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
+mmproj_name = "mmproj-F16"
 n_ctx = 16384
 temperature = 0.0
 top_p = 0.95

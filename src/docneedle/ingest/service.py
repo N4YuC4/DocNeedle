@@ -84,7 +84,7 @@ class IngestionService:
                     chunks=cloned_chunks,
                 )
 
-        document, actual_filename = self.parser.parse_bytes(
+        document, actual_filename, page_images = self.parser.parse_bytes(
             content=content,
             filename=filename,
         )
@@ -92,6 +92,7 @@ class IngestionService:
             document=document,
             doc_id=actual_doc_id,
             doc_name=actual_filename,
+            page_images=page_images,
         )
 
         all_pages = {c.page_number for c in chunks if c.page_number is not None}

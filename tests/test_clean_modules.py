@@ -151,7 +151,7 @@ class TestLLMLocalEngineHelpers:
         prompt = _build_extraction_prompt(
             context=long_ctx,
             query="Kira bedeli nedir?",
-            max_tokens=320,
+            max_tokens=500,
             llm=DummyLLM(),
             enable_thinking=False,
         )
@@ -471,12 +471,10 @@ class TestConfigurableSettings:
         from docneedle.config import settings
 
         # Ingest & Parser
-        assert hasattr(settings, "ocr_pdf_render_scale")
+        assert hasattr(settings, "pdf_render_scale")
         assert hasattr(settings, "pdf_embedded_text_min_chars")
-        assert hasattr(settings, "ocr_fallback_min_chars")
-        assert hasattr(settings, "ocr_model_name")
-        assert hasattr(settings, "ocr_text_score")
-        assert hasattr(settings, "ocr_longest_edge")
+        assert hasattr(settings, "pdf_embedded_text_max_check_pages")
+        assert hasattr(settings, "ingestion_cache_enabled")
 
         # Chunker
         assert hasattr(settings, "chunker_tokenizer_model")
@@ -515,96 +513,23 @@ class TestConfigurableSettings:
         assert zero_score == settings.confidence_not_found_score
 
 
-class TestEphemeralRapidOCREngine:
-    """Test ephemeral RapidOCR lifecycle, transcription, and memory reclamation."""
+class TestVisualPageIngestion:
+    """Test OCR-free visual document chunk generation."""
 
-    def test_requires_context_manager(self) -> None:
-        from PIL import Image
+    def test_visual_document_chunk_model(self) -> None:
+        from docneedle.ingest.models import DocumentChunk
 
-        from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine
-
-        engine = EphemeralRapidOCREngine()
-        img = Image.new("RGB", (100, 100), color="white")
-        with pytest.raises(RuntimeError, match="must be used within a 'with' block"):
-            engine.transcribe_image(img)
-
-    def test_ephemeral_engine_lifecycle_and_transcription(self, monkeypatch) -> None:
-        from unittest.mock import MagicMock
-
-        from PIL import Image
-
-        from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine
-
-        mock_output = MagicMock()
-        mock_output.txts = ("FATURA", "Toplam Tutar: 15.000 TL")
-        mock_output.to_markdown.return_value = "FATURA\n\nToplam Tutar: 15.000 TL"
-
-        mock_rapid_inst = MagicMock(return_value=mock_output)
-        mock_rapid_cls = MagicMock(return_value=mock_rapid_inst)
-
-        monkeypatch.setattr("rapidocr.RapidOCR", mock_rapid_cls)
-
-        img = Image.new("RGB", (100, 100), color="white")
-
-        engine = EphemeralRapidOCREngine(text_score=0.6)
-        assert engine.ocr is None
-
-        with engine as ocr:
-            assert ocr.ocr is not None
-            text = ocr.transcribe_image(img)
-            assert text == "FATURA\n\nToplam Tutar: 15.000 TL"
-            mock_rapid_inst.assert_called_once()
-
-        # After exiting with block, engine reference must be cleared
-        assert engine.ocr is None
-        assert engine.active_use_cuda is False
-
-    def test_ephemeral_engine_gpu_and_cpu_params(self, monkeypatch) -> None:
-        from unittest.mock import MagicMock
-
-        from docneedle.config import settings
-        from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine, _resolve_ocr_use_cuda
-
-        mock_rapid_inst = MagicMock()
-        mock_rapid_cls = MagicMock(return_value=mock_rapid_inst)
-        monkeypatch.setattr("rapidocr.RapidOCR", mock_rapid_cls)
-
-        # 1. Force GPU mode via monkeypatching _resolve_ocr_use_cuda -> True
-        monkeypatch.setattr(
-            "docneedle.ingest.ocr_engine._resolve_ocr_use_cuda", lambda _=None: True
+        chunk = DocumentChunk(
+            chunk_id="c_img_1",
+            doc_id="d1",
+            doc_name="scan.pdf",
+            chunk_index=0,
+            text="[Görsel Belge Sayfası 1 - scan.pdf]",
+            page_number=1,
+            image_bytes=b"fake_jpeg_bytes",
         )
-        with EphemeralRapidOCREngine(text_score=0.55, use_cuda=True) as ocr_gpu:
-            assert ocr_gpu.active_use_cuda is True
-            called_params = mock_rapid_cls.call_args.kwargs["params"]
-            assert called_params["EngineConfig.onnxruntime.use_cuda"] is True
-            assert called_params["Rec.rec_batch_num"] == settings.ocr_rec_batch_num
-            assert (
-                called_params["EngineConfig.onnxruntime.cuda_ep_cfg.device_id"]
-                == settings.ocr_gpu_device_id
-            )
-            assert (
-                called_params["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search"]
-                == settings.ocr_cuda_conv_algo_search
-            )
-            assert (
-                called_params["EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy"]
-                == settings.ocr_cuda_arena_extend_strategy
-            )
-
-        # 2. Force CPU mode -> use_cuda=False
-        mock_rapid_cls.reset_mock()
-        monkeypatch.setattr(
-            "docneedle.ingest.ocr_engine._resolve_ocr_use_cuda", lambda _=None: False
-        )
-        with EphemeralRapidOCREngine(use_cuda=False) as ocr_cpu:
-            assert ocr_cpu.active_use_cuda is False
-            cpu_params = mock_rapid_cls.call_args.kwargs["params"]
-            assert cpu_params["EngineConfig.onnxruntime.use_cuda"] is False
-            assert cpu_params["Rec.rec_batch_num"] == 6
-            assert "EngineConfig.onnxruntime.cuda_ep_cfg.device_id" not in cpu_params
-
-        # 3. _resolve_ocr_use_cuda respects explicit False override
-        assert _resolve_ocr_use_cuda(False) is False
+        assert chunk.image_bytes == b"fake_jpeg_bytes"
+        assert chunk.page_number == 1
 
 
 class TestCodeReviewRegressionFixes:
@@ -670,8 +595,8 @@ class TestCodeReviewRegressionFixes:
             "İkinci sayfa metni burada yer almaktadır.\n"
         ).encode("utf-8")
 
-        parser = DoclingParser(ocr_enabled=False)
-        doc, fname = parser.parse_bytes(md_bytes, filename="test.md")
+        parser = DoclingParser()
+        doc, fname, _ = parser.parse_bytes(md_bytes, filename="test.md")
         chunker = DoclingChunker()
         chunks = chunker.chunk_document(doc, doc_id="doc_test", doc_name=fname)
 
@@ -750,8 +675,8 @@ class TestCodeReviewRegressionFixes:
             b"Soyadi: ABAZ\n"
             b"Dogum Tarihi: 04.05.2004\n"
         )
-        parser = DoclingParser(ocr_enabled=False)
-        doc, fname = parser.parse_bytes(multiline_content, filename="kimlik.txt")
+        parser = DoclingParser()
+        doc, fname, _ = parser.parse_bytes(multiline_content, filename="kimlik.txt")
         chunker = DoclingChunker()
         chunks = chunker.chunk_document(doc, doc_id="test_doc", doc_name=fname)
 
@@ -761,30 +686,6 @@ class TestCodeReviewRegressionFixes:
         assert "Kimlik No: 12757385200\n" in chunk_text or "Kimlik No: 12757385200" in chunk_text
         assert "Adi: HUSEYIN\n" in chunk_text or "Adi: HUSEYIN" in chunk_text
         assert "HUSEYIN ABAZ 04.05.2004" not in chunk_text
-
-    def test_format_ocr_layout_separates_adjacent_table_columns(self) -> None:
-        import numpy as np
-
-        from docneedle.ingest.ocr_engine import format_ocr_layout
-
-        boxes = np.array(
-            [
-                [[10, 10], [90, 10], [90, 30], [10, 30]],  # "12757385200"
-                [[105, 10], [210, 10], [210, 30], [105, 30]],  # "Hüseyin ABAZ" (gap=15)
-                [[225, 10], [270, 10], [270, 30], [225, 30]],  # "Ömer" (gap=15)
-                [[285, 10], [330, 10], [330, 30], [285, 30]],  # "Ayşe" (gap=15)
-                [[345, 10], [390, 10], [390, 30], [345, 30]],  # "Erkek" (gap=15)
-            ],
-            dtype=np.float32,
-        )
-        txts = ("12757385200", "Hüseyin ABAZ", "Ömer", "Ayşe", "Erkek")
-        layout = format_ocr_layout(boxes, txts)
-
-        # Columns must be distinctly separated with ' | ' rather than glued with spaces
-        assert "12757385200 | Hüseyin ABAZ" in layout
-        assert "Hüseyin ABAZ | Ömer" in layout
-        assert "Ömer | Ayşe" in layout
-        assert "Ayşe | Erkek" in layout
 
     def test_confidence_calculator_new_type_validation(self) -> None:
         from docneedle.extraction.verifier import ConfidenceCalculator
@@ -907,9 +808,9 @@ app_name = "DocNeedle Test Suite"
 gpu_enabled = true
 llm_n_gpu_layers = -1
 
-[ocr]
-longest_edge = 2400
-rec_model_type = "medium"
+[ingest]
+pdf_render_scale = 2.0
+pdf_embedded_text_min_chars = 100
 """
         )
 
@@ -920,8 +821,8 @@ rec_model_type = "medium"
         assert data["app_name"] == "DocNeedle Test Suite"
         assert data["gpu_enabled"] is True
         assert data["llm_n_gpu_layers"] == -1
-        assert data["ocr_longest_edge"] == 2400
-        assert data["ocr_rec_model_type"] == "medium"
+        assert data["pdf_render_scale"] == 2.0
+        assert data["pdf_embedded_text_min_chars"] == 100
 
     def test_settings_loads_with_toml_source(self, monkeypatch, tmp_path) -> None:
         from docneedle.config import Settings
@@ -962,15 +863,9 @@ class TestRefactoredParserAndEmbedderHelpers:
     def test_embedder_vector_helpers(self) -> None:
         import numpy as np
 
-        from docneedle.retrieval.embedder import (
-            _format_embedding_prompt,
-            _truncate_and_normalize_vector,
-        )
+        from docneedle.retrieval.embedder import _normalize_vector
 
-        assert _format_embedding_prompt("test doc", is_query=False) == "test doc"
-        assert "test query" in _format_embedding_prompt("test query", is_query=True)
-
-        raw = np.array([3.0, 4.0, 99.0, 100.0], dtype=np.float32)
-        vec = _truncate_and_normalize_vector(raw, dimension=2)
+        raw = np.array([3.0, 4.0], dtype=np.float32)
+        vec = _normalize_vector(raw)
         assert vec.shape == (2,)
         assert np.allclose(vec, np.array([0.6, 0.8], dtype=np.float32))

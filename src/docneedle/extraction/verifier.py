@@ -68,6 +68,10 @@ def _validate_id(val: str) -> bool:
     return sum(ch.isdigit() for ch in val) >= 4
 
 
+def _validate_boolean(val: str) -> bool:
+    return val.strip().lower() in _BOOLEAN_TERMS
+
+
 TYPE_CONSTRAINTS: dict[str, TypeConstraint] = {
     "money": TypeConstraint(is_valid=_has_digits, penalty=PENALTY_HIGH),
     "number": TypeConstraint(is_valid=_has_digits, penalty=PENALTY_HIGH),
@@ -77,6 +81,7 @@ TYPE_CONSTRAINTS: dict[str, TypeConstraint] = {
     "phone": TypeConstraint(is_valid=_validate_phone, penalty=PENALTY_HIGH),
     "date": TypeConstraint(is_valid=_has_digits, penalty=PENALTY_MEDIUM),
     "id": TypeConstraint(is_valid=_validate_id, penalty=PENALTY_MEDIUM),
+    "boolean": TypeConstraint(is_valid=_validate_boolean, penalty=PENALTY_HIGH),
 }
 
 
@@ -97,6 +102,10 @@ class ConfidenceCalculator:
 
         if is_boolean_val and expected_type and expected_type.lower() == "boolean":
             return CONFIDENCE_BOOLEAN_SCORE
+
+        is_visual_chunk = "[görsel doküman" in norm_chunk or "[görsel belge sayfası" in norm_chunk
+        if is_visual_chunk:
+            return CONFIDENCE_ALL_WORDS_SCORE
 
         if len(norm_val) <= 3:
             exact_short_match = bool(re.search(r"\b" + re.escape(norm_val) + r"\b", norm_chunk))

@@ -76,6 +76,7 @@ class DoclingChunker:
         document: DoclingDocument,
         doc_id: str,
         doc_name: str,
+        page_images: dict[int, bytes] | None = None,
     ) -> list[DocumentChunk]:
         """Convert a DoclingDocument into discrete DocumentChunk objects."""
         raw_chunks = list(self.chunker.chunk(document))
@@ -114,6 +115,15 @@ class DoclingChunker:
             if heading and not chunk_text.startswith(heading):
                 chunk_text = f"{heading}\n{chunk_text}"
 
+            img_bytes = None
+            if page_images and primary_page and primary_page in page_images:
+                img_bytes = page_images[primary_page]
+            elif (
+                page_images and len(page_images) == 1 and 1 in page_images and primary_page is None
+            ):
+                img_bytes = page_images[1]
+                primary_page = 1
+
             chunk = DocumentChunk(
                 chunk_id=chunk_id,
                 doc_id=doc_id,
@@ -123,12 +133,38 @@ class DoclingChunker:
                 page_number=primary_page,
                 heading=heading,
                 is_table=is_table,
+                image_bytes=img_bytes,
                 metadata={
                     "headings": headings_list,
                     "pages": sorted(page_numbers) if page_numbers else [],
                 },
             )
             chunks.append(chunk)
+
+        # Backfill any visual pages that did not produce textual items
+        if page_images:
+            represented_pages = {
+                c.page_number
+                for c in chunks
+                if c.page_number is not None and c.image_bytes is not None
+            }
+            for p_num, b_data in sorted(page_images.items()):
+                if p_num not in represented_pages:
+                    idx = len(chunks)
+                    chunks.append(
+                        DocumentChunk(
+                            chunk_id=f"{doc_id}_{idx}",
+                            doc_id=doc_id,
+                            doc_name=doc_name,
+                            chunk_index=idx,
+                            text=f"[Görsel Belge Sayfası {p_num} - {doc_name}]",
+                            page_number=p_num,
+                            heading=f"Sayfa {p_num}",
+                            is_table=False,
+                            image_bytes=b_data,
+                            metadata={"headings": [f"Sayfa {p_num}"], "pages": [p_num]},
+                        )
+                    )
 
         return self._coalesce_small_chunks(chunks)
 
@@ -141,6 +177,8 @@ class DoclingChunker:
         overflow_factor: float | None = None,
     ) -> bool:
         """Evaluate if two consecutive chunks are eligible for coalescence."""
+        if current.image_bytes is not None or candidate.image_bytes is not None:
+            return False
         max_chars = settings.chunker_max_chunk_chars if max_chunk_chars is None else max_chunk_chars
         min_chars = settings.chunker_min_split_chars if min_split_chars is None else min_split_chars
         factor = settings.chunker_overflow_factor if overflow_factor is None else overflow_factor

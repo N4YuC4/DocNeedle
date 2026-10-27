@@ -1,0 +1,7 @@
+# Git LFS attributes for Hugging Face Hub / Git deployment
+*.so filter=lfs diff=lfs merge=lfs -text
+*.so.* filter=lfs diff=lfs merge=lfs -text
+*.gguf filter=lfs diff=lfs merge=lfs -text
+*.onnx filter=lfs diff=lfs merge=lfs -text
+*.onnx_data filter=lfs diff=lfs merge=lfs -text
+

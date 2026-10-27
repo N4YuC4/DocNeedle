@@ -383,6 +383,27 @@ def _is_not_found_value(text: str, expected_type: str | None = None) -> bool:
     return bool(_NOT_FOUND_SUFFIX_PATTERN.search(norm))
 
 
+def _normalize_typed_value(
+    val: str,
+    expected_type: str | None,
+) -> tuple[bool, str | None]:
+    """Normalize extracted value against expected data type contract."""
+    if _is_not_found_value(val, expected_type=expected_type):
+        return False, None
+
+    if expected_type and expected_type.lower() == "boolean":
+        lower = val.strip().lower().strip("\"'., ")
+        if lower in {"yes", "evet", "true", "var", "mevcut", "1"}:
+            return True, "Yes"
+        if lower in _BOOLEAN_VALID_NEGATIVES or lower in {"no", "hayır", "hayir", "0"}:
+            return True, "No"
+        # If the model extracted an entity/ID (e.g. passport number 'U30154391')
+        # for a boolean query, it confirms presence of the requested entity
+        return True, "Yes"
+
+    return True, val
+
+
 def _log_extraction_trace(
     query_key: str,
     thinking: str | None,
@@ -433,6 +454,17 @@ def _resolve_default_model_path() -> Path:
     if not candidate.exists():
         raise FileNotFoundError(f"Configured GGUF model '{model_name}' not found at: {candidate}")
     return candidate
+
+
+def _resolve_llm_mmproj_path() -> Path | None:
+    """Resolve multimodal projector GGUF for the LLM if present."""
+    base = Path(settings.model_storage_dir) / "llm"
+    mmproj_name = settings.llm_mmproj_name
+    filename = mmproj_name if mmproj_name.endswith(".gguf") else f"{mmproj_name}.gguf"
+    candidate = base / filename
+    if candidate.exists():
+        return candidate
+    return None
 
 
 def _probe_template_delimiters(
@@ -578,12 +610,27 @@ class LocalLLMEngine:
 
         logger.info("Loading local LLM (%s) from %s...", self.model_path.name, self.model_path)
 
+        self.mmproj_path = _resolve_llm_mmproj_path()
+        chat_handler = None
+        if self.mmproj_path is not None:
+            try:
+                from llama_cpp.llama_chat_format import Gemma4ChatHandler
+
+                chat_handler = Gemma4ChatHandler(
+                    clip_model_path=str(self.mmproj_path), verbose=False
+                )
+                logger.info("Multimodal vision support enabled with %s", self.mmproj_path)
+            except Exception as e:
+                logger.error("Could not initialize Gemma4ChatHandler: %s", e)
+                raise
+
         draft_model = _create_speculative_draft_model(self.model_path, Llama)
         logits_all = draft_model is not None
         self.n_ctx = min(settings.llm_n_ctx, 4096) if logits_all else settings.llm_n_ctx
 
         self.llm = Llama(
             model_path=str(self.model_path),
+            chat_handler=chat_handler,
             draft_model=draft_model,
             logits_all=logits_all,
             n_ctx=self.n_ctx,
@@ -604,6 +651,14 @@ class LocalLLMEngine:
             # When logits_all=False and logprobs=None, llama-cpp-python never writes to or reads
             # from self.scores (which otherwise pre-allocates n_batch * n_vocab * 4 bytes, ~536 MB).
             self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
+
+        if chat_handler is not None:
+            try:
+                chat_handler._init_mtmd_context(self.llm)
+                logger.info("Multimodal vision context initialized successfully on GPU.")
+            except Exception as e:
+                logger.error("Failed to initialize multimodal vision context: %s", e)
+                raise
 
         (
             self._chat_formatter,
@@ -660,12 +715,87 @@ class LocalLLMEngine:
         query_key: str,
         query_description: str,
         context: str,
+        image_bytes_list: list[bytes] | None = None,
         expected_type: str | None = None,
         enable_thinking: bool | None = None,
     ) -> LLMExtractionResult:
         """Extract requested item from document context chunks using local neural model."""
         target_query = (query_description or query_key).strip()
         use_thinking = settings.llm_enable_thinking if enable_thinking is None else enable_thinking
+
+        # If visual chunks are provided and vision is available, use multimodal completion
+        valid_images = [b for b in (image_bytes_list or []) if b]
+        if valid_images:
+            import base64
+
+            logger.info(
+                "--> [LLM Multimodal] Analyzing %d image chunk(s) for field '%s'...",
+                len(valid_images),
+                query_key,
+            )
+            type_prompt = ""
+            if expected_type and expected_type.lower() in TYPE_GUIDELINES:
+                guide = TYPE_GUIDELINES[expected_type.lower()]
+                type_prompt = (
+                    f"\nExpected Data Type: {expected_type} ({guide['description']})\n"
+                    f"Example Output Format: {guide['example']}"
+                )
+
+            active_sys_prompt = _get_base_rules() + (
+                THINKING_RULE if use_thinking else NON_THINKING_RULE
+            )
+            instruction_text = (
+                f"{active_sys_prompt}\n\n"
+                f'Document Context:\n"""\n{context}\n"""\n\n'
+                f"Question / Target Field: {target_query}{type_prompt}"
+            )
+
+            user_content: list[dict[str, Any]] = [{"type": "text", "text": instruction_text}]
+            for img_b in valid_images:
+                b64_str = base64.b64encode(img_b).decode("utf-8")
+                user_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64_str}"},
+                    }
+                )
+
+            messages = [{"role": "user", "content": user_content}]
+            with self._lock:
+                avail_tokens = (
+                    settings.llm_thinking_max_tokens
+                    if use_thinking
+                    else settings.llm_single_field_max_tokens
+                )
+                res = self.llm.create_chat_completion(
+                    messages=messages,
+                    temperature=settings.llm_temperature,
+                    top_p=settings.llm_top_p,
+                    max_tokens=avail_tokens,
+                )
+
+            raw_content = res["choices"][0]["message"]["content"] or ""
+            thinking, raw_answer = _parse_model_response(
+                raw_content,
+                started_in_thought=use_thinking,
+                thought_open_tag=self._thought_open_tag,
+                thought_close_tag=self._thought_close_tag,
+            )
+            cleaned_val = _sanitize_extracted_value(raw_answer)
+            is_found, normalized_val = _normalize_typed_value(cleaned_val, expected_type)
+
+            _log_extraction_trace(
+                query_key=query_key,
+                thinking=thinking,
+                value=normalized_val or cleaned_val,
+                found=is_found,
+            )
+
+            return {
+                "found": is_found,
+                "value": normalized_val,
+                "thinking": thinking,
+            }
 
         # Compute safe prompt budget respecting self.n_ctx while reserving space for generation
         if use_thinking:
@@ -726,21 +856,18 @@ class LocalLLMEngine:
                 raw_answer = cont_answer
 
         cleaned_val = _sanitize_extracted_value(raw_answer)
-        is_not_found = _is_not_found_value(cleaned_val, expected_type=expected_type)
+        is_found, normalized_val = _normalize_typed_value(cleaned_val, expected_type)
 
         _log_extraction_trace(
             query_key=query_key,
             thinking=thinking,
-            value=cleaned_val,
-            found=not is_not_found,
+            value=normalized_val or cleaned_val,
+            found=is_found,
         )
 
-        if is_not_found:
-            return {"found": False, "value": None, "thinking": thinking}
-
         return {
-            "found": True,
-            "value": cleaned_val,
+            "found": is_found,
+            "value": normalized_val,
             "thinking": thinking,
         }
 

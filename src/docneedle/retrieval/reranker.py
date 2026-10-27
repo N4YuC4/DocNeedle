@@ -152,11 +152,22 @@ class Qwen3Reranker:
 
         scored_candidates: list[SearchResult] = []
         for c in candidates:
+            eval_text = c.chunk.text
+            if c.chunk.image_bytes is not None:
+                doc_title = Path(c.chunk.doc_name).stem.replace("_", " ").replace("-", " ")
+                eval_text = f"Belge: {doc_title} (Sayfa {c.chunk.page_number or 1})\n{c.chunk.text}"
+
             rel_score = self.score(
                 query=query,
-                doc_text=c.chunk.text,
+                doc_text=eval_text,
                 instruction=instr,
             )
+
+            # Preserve cross-modal dense semantic signal for visual page chunks
+            if c.chunk.image_bytes is not None and c.dense_score is not None:
+                dense_logit_boost = (float(c.dense_score) - 0.5) * 5.0
+                rel_score = max(rel_score, dense_logit_boost)
+
             scored_candidates.append(
                 SearchResult(
                     chunk=c.chunk,

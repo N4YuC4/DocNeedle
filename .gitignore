@@ -5,6 +5,8 @@
 # --- OS & Editor Artifacts ---
 .DS_Store
 Thumbs.db
+.fuse_hidden*
+*.fuse_hidden*
 .idea/
 .vscode/
 *.swp
@@ -25,6 +27,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+!src/docneedle/retrieval/*.so*
 .venv/
 venv/
 ENV/

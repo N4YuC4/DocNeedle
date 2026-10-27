@@ -1,12 +1,19 @@
+"""High-fidelity document parser supporting PDF, DOCX, XLSX, HTML, TXT, and images.
+
+Pure OCR-free architecture: Scanned PDF pages and images are preserved as high-resolution
+visual page chunks with raw image bytes in memory for multimodal retrieval and extraction.
+"""
+
+import io
 import logging
 import re
 import tempfile
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from docling_core.types.doc.document import DoclingDocument
+from PIL import Image
 
 from docneedle.config import settings
 
@@ -54,65 +61,15 @@ def _is_extracted_text_readable(text: str, min_chars: int | None = None) -> bool
         garbled_tokens = 0
         for tok in tokens:
             if len(tok) >= MIN_GARBLED_TOKEN_LEN:
-                has_Garbled_sym = any(sym in tok for sym in _GARBLED_MIDWORD_SYMBOLS) and any(
+                has_garbled_sym = any(sym in tok for sym in _GARBLED_MIDWORD_SYMBOLS) and any(
                     c.isalnum() for c in tok
                 )
-                if has_Garbled_sym or _CONSONANT_RUN_RE.search(tok):
+                if has_garbled_sym or _CONSONANT_RUN_RE.search(tok):
                     garbled_tokens += 1
         if garbled_tokens / len(tokens) > GARBLED_TOKEN_RATIO_THRESHOLD:
             return False
 
     return True
-
-
-def _pdf_has_embedded_text(
-    path_obj: Path,
-    max_check_pages: int | None = None,
-    min_chars: int | None = None,
-) -> bool:
-    """Check if PDF has readable embedded digital text to skip redundant OCR."""
-    max_pages = (
-        settings.pdf_embedded_text_max_check_pages if max_check_pages is None else max_check_pages
-    )
-    threshold = settings.pdf_embedded_text_min_chars if min_chars is None else min_chars
-    try:
-        import pypdfium2
-
-        pdf = pypdfium2.PdfDocument(path_obj)
-        try:
-            total_len = 0
-            collected: list[str] = []
-            pages_to_check = min(len(pdf), max_pages)
-            for i in range(pages_to_check):
-                page = pdf[i]
-                try:
-                    text_page = page.get_textpage()
-                    try:
-                        text = text_page.get_text_range().strip()
-                        if text:
-                            collected.append(text)
-                            total_len += len(text)
-                    finally:
-                        text_page.close()
-                finally:
-                    page.close()
-
-            if total_len <= threshold:
-                return False
-
-            combined = "\n".join(collected)
-            if not _is_extracted_text_readable(combined, min_chars=threshold):
-                logger.info(
-                    f"PDF '{path_obj.name}' has corrupted embedded font CMap; routing to RapidOCR."
-                )
-                return False
-
-            return True
-        finally:
-            pdf.close()
-    except Exception as e:
-        logger.debug(f"Could not inspect PDF embedded text: {e}")
-        return False
 
 
 _PAGE_HEADING_LINE_RE = re.compile(r"^##\s+Sayfa\s+\d+\s*$")
@@ -167,68 +124,52 @@ def _markdown_to_docling_document(
     return doc
 
 
-class DoclingParser:
-    """Handles high-fidelity parsing of documents across PDF, DOCX, XLSX, HTML, and images."""
+def _render_pdf_page_image(page: Any, scale: float | None = None) -> bytes:
+    """Render a single PDF page to JPEG byte stream in memory."""
+    s = settings.pdf_render_scale if scale is None else scale
+    bitmap = page.render(scale=s)
+    try:
+        pil_img = bitmap.to_pil().convert("RGB")
+    finally:
+        bitmap.close()
 
-    def __init__(self, ocr_enabled: bool | None = None) -> None:
-        self.ocr_enabled = settings.ocr_enabled if ocr_enabled is None else ocr_enabled
-        self._active_ocr_engine: Any = None
+    try:
+        buf = io.BytesIO()
+        pil_img.save(buf, format="JPEG", quality=90)
+        return buf.getvalue()
+    finally:
+        pil_img.close()
+
+
+class DoclingParser:
+    """Handles high-fidelity parsing of documents across PDF, DOCX, XLSX, HTML, TXT, and images.
+
+    Completely OCR-free: Scanned PDF pages and images are ingested as visual page chunks
+    preserving in-memory JPEG bytes for multimodal embedding and LLM reasoning.
+    """
+
+    def __init__(self) -> None:
+        pass
 
     def __enter__(self) -> "DoclingParser":
-        from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine
-
-        if self.ocr_enabled and self._active_ocr_engine is None:
-            self._active_ocr_engine = EphemeralRapidOCREngine().__enter__()
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        if self._active_ocr_engine is not None:
-            try:
-                self._active_ocr_engine.__exit__(exc_type, exc_val, exc_tb)
-            finally:
-                self._active_ocr_engine = None
+        pass
 
-    @contextmanager
-    def _acquire_ocr_engine(self) -> Any:
-        """Acquire active OCR engine or create an ephemeral engine for the context."""
-        if self._active_ocr_engine is not None:
-            yield self._active_ocr_engine
-        elif self.ocr_enabled:
-            from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine
-
-            with EphemeralRapidOCREngine() as engine:
-                yield engine
-        else:
-            yield None
-
-    def _ocr_single_pdf_page(self, page: Any, engine: Any) -> str:
-        """Render a single PDF page and transcribe it with the given RapidOCR engine."""
-        longest_edge = settings.ocr_longest_edge
-        w, h = page.get_size()
-        scale = (longest_edge / max(w, h)) if (w > 0 and h > 0) else settings.ocr_pdf_render_scale
-        bitmap = page.render(scale=scale)
-        try:
-            pil_img = bitmap.to_pil().convert("RGB")
-        finally:
-            bitmap.close()
-
-        try:
-            return engine.transcribe_image(pil_img).strip()
-        finally:
-            pil_img.close()
-
-    def _parse_digital_pdf(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
-        """Extract digital text from PDF using pypdfium2 with per-page OCR fallback."""
+    def _parse_pdf(
+        self, path_obj: Path, doc_title: str | None = None
+    ) -> tuple[DoclingDocument, dict[int, bytes]]:
+        """Extract digital text or render high-resolution visual page chunks."""
         import pypdfium2
-
-        from docneedle.ingest.ocr_engine import EphemeralRapidOCREngine
 
         title = doc_title or path_obj.stem
         pdf = pypdfium2.PdfDocument(path_obj)
-        local_ocr_engine: Any = None
+        page_images: dict[int, bytes] = {}
         try:
             md_parts = [f"# {title}\n"]
             for i in range(len(pdf)):
+                page_idx = i + 1
                 page = pdf[i]
                 try:
                     text_page = page.get_textpage()
@@ -237,97 +178,56 @@ class DoclingParser:
                     finally:
                         text_page.close()
 
-                    if (
-                        not _is_extracted_text_readable(
-                            text, min_chars=settings.ocr_fallback_min_chars
-                        )
-                        and self.ocr_enabled
+                    if text and _is_extracted_text_readable(
+                        text, min_chars=settings.ocr_fallback_min_chars
                     ):
+                        page_content = _format_clean_lines(text)
+                        md_parts.append(f"## Sayfa {page_idx}\n\n{page_content}\n")
+                    else:
                         logger.info(
-                            "--> [OCR Fallback] Page %d/%d of '%s' has unreadable text; OCR...",
-                            i + 1,
+                            "--> [Visual Page] Page %d/%d of '%s' is scanned; preserving image.",
+                            page_idx,
                             len(pdf),
                             title,
                         )
-                        engine = self._active_ocr_engine
-                        if engine is None:
-                            if local_ocr_engine is None:
-                                local_ocr_engine = EphemeralRapidOCREngine().__enter__()
-                            engine = local_ocr_engine
-                        ocr_text = self._ocr_single_pdf_page(page, engine)
-                        if ocr_text:
-                            text = ocr_text
-
-                    if text:
-                        page_content = _format_clean_lines(text)
-                        md_parts.append(f"## Sayfa {i + 1}\n\n{page_content}\n")
+                        img_bytes = _render_pdf_page_image(page)
+                        page_images[page_idx] = img_bytes
+                        md_parts.append(
+                            f"## Sayfa {page_idx}\n\n[Görsel Belge Sayfası {page_idx} - {title}]\n"
+                        )
                 finally:
                     page.close()
         finally:
-            if local_ocr_engine is not None:
-                local_ocr_engine.__exit__(None, None, None)
             pdf.close()
 
-        return _markdown_to_docling_document(
+        doc = _markdown_to_docling_document(
             markdown_content="\n".join(md_parts),
             title=title,
         )
+        return doc, page_images
 
-    def _parse_scanned_pdf(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
-        """Extract text from scanned PDF pages using pypdfium2 and ephemeral RapidOCR."""
-        import pypdfium2
-
-        title = doc_title or path_obj.stem
-        pdf = pypdfium2.PdfDocument(path_obj)
-        try:
-            total_pages = len(pdf)
-            logger.info(
-                "PDF '%s' is scanned (%d pages). Processing all pages with RapidOCR...",
-                title,
-                total_pages,
-            )
-
-            md_parts = [f"# {title}\n"]
-            with self._acquire_ocr_engine() as engine:
-                for page_idx in range(total_pages):
-                    logger.info(
-                        f"--> [OCR] Processing page {page_idx + 1}/{total_pages} of '{title}'..."
-                    )
-                    page = pdf[page_idx]
-                    try:
-                        page_text = self._ocr_single_pdf_page(page, engine)
-                        if page_text:
-                            page_content = _format_clean_lines(page_text)
-                            md_parts.append(f"## Sayfa {page_idx + 1}\n\n{page_content}\n")
-                    finally:
-                        page.close()
-        finally:
-            pdf.close()
-
-        return _markdown_to_docling_document(
-            markdown_content="\n".join(md_parts),
-            title=title,
-        )
-
-    def _parse_image(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
-        """Extract text from an image file using ephemeral RapidOCR."""
-        from PIL import Image
-
+    def _parse_image(
+        self, path_obj: Path, doc_title: str | None = None
+    ) -> tuple[DoclingDocument, dict[int, bytes]]:
+        """Ingest an image file as a visual document chunk preserving raw RGB bytes."""
         title = doc_title or path_obj.stem
         with Image.open(path_obj) as img:
             rgb_img = img.convert("RGB")
+            buf = io.BytesIO()
+            rgb_img.save(buf, format="JPEG", quality=92)
+            img_bytes = buf.getvalue()
 
-        with self._acquire_ocr_engine() as engine:
-            page_text = engine.transcribe_image(rgb_img)
-
-        page_content = _format_clean_lines(page_text)
-        full_md = f"# {title}\n\n{page_content}\n"
-        return _markdown_to_docling_document(
+        page_images: dict[int, bytes] = {1: img_bytes}
+        full_md = f"# {title}\n\n## Sayfa 1\n\n[Görsel Doküman - {title}]\n"
+        doc = _markdown_to_docling_document(
             markdown_content=full_md,
             title=title,
         )
+        return doc, page_images
 
-    def _parse_docx(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+    def _parse_docx(
+        self, path_obj: Path, doc_title: str | None = None
+    ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract structured text and tables from a DOCX file."""
         import docx
 
@@ -351,9 +251,11 @@ class DoclingParser:
                 md_parts.append("| " + " | ".join(cells) + " |")
             md_parts.append("")
 
-        return _markdown_to_docling_document("\n".join(md_parts), title=title)
+        return _markdown_to_docling_document("\n".join(md_parts), title=title), {}
 
-    def _parse_xlsx(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+    def _parse_xlsx(
+        self, path_obj: Path, doc_title: str | None = None
+    ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract structured sheets and tables from an XLSX file."""
         import openpyxl
 
@@ -378,9 +280,11 @@ class DoclingParser:
                     header_written = True
             md_parts.append("")
 
-        return _markdown_to_docling_document("\n".join(md_parts), title=title)
+        return _markdown_to_docling_document("\n".join(md_parts), title=title), {}
 
-    def _parse_html(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+    def _parse_html(
+        self, path_obj: Path, doc_title: str | None = None
+    ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract structured text from an HTML file."""
         from bs4 import BeautifulSoup
 
@@ -401,18 +305,20 @@ class DoclingParser:
             else:
                 md_parts.append(f"{txt}\n")
 
-        return _markdown_to_docling_document("\n".join(md_parts), title=title)
+        return _markdown_to_docling_document("\n".join(md_parts), title=title), {}
 
-    def _parse_text(self, path_obj: Path, doc_title: str | None = None) -> DoclingDocument:
+    def _parse_text(
+        self, path_obj: Path, doc_title: str | None = None
+    ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract text from plain text or markdown files."""
         title = doc_title or path_obj.stem
         text = path_obj.read_text(encoding="utf-8", errors="ignore")
-        return _markdown_to_docling_document(text, title=title)
+        return _markdown_to_docling_document(text, title=title), {}
 
     def parse_path(
         self, path: Path | str, display_name: str | None = None
-    ) -> tuple[DoclingDocument, str]:
-        """Parse a document file from a filesystem path."""
+    ) -> tuple[DoclingDocument, str, dict[int, bytes]]:
+        """Parse a document file from a filesystem path, extracting text and visual page images."""
         path_obj = Path(path)
         if not path_obj.exists():
             raise FileNotFoundError(f"Document file does not exist: {path_obj}")
@@ -422,58 +328,44 @@ class DoclingParser:
         suffix = path_obj.suffix.lower()
 
         if suffix in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"}:
-            logger.info(f"Image '{filename}' detected; running ephemeral RapidOCR.")
-            return self._parse_image(path_obj, doc_title=doc_title), filename
+            logger.info(f"Image '{filename}' detected; loading as multimodal visual chunk.")
+            doc, images = self._parse_image(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
         if suffix == ".pdf":
-            has_text = _pdf_has_embedded_text(path_obj)
-            if not has_text and self.ocr_enabled:
-                logger.info(
-                    f"PDF '{filename}' is scanned or unreadable; running ephemeral RapidOCR."
-                )
-                return self._parse_scanned_pdf(path_obj, doc_title=doc_title), filename
-            else:
-                logger.info(f"PDF '{filename}' contains digital text; using fast parser.")
-                doc = self._parse_digital_pdf(path_obj, doc_title=doc_title)
-                body_text = _extract_markdown_body(doc.export_to_markdown().strip())
-                md_len = len(body_text)
-                if (
-                    md_len < settings.ocr_fallback_min_chars
-                    or not _is_extracted_text_readable(
-                        body_text, min_chars=settings.ocr_fallback_min_chars
-                    )
-                ) and self.ocr_enabled:
-                    logger.info(
-                        f"Digital extraction yielded low/garbled text ({md_len} chars); "
-                        "running ephemeral RapidOCR."
-                    )
-                    return self._parse_scanned_pdf(path_obj, doc_title=doc_title), filename
-                return doc, filename
+            doc, images = self._parse_pdf(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
         if suffix == ".docx":
-            return self._parse_docx(path_obj, doc_title=doc_title), filename
+            doc, images = self._parse_docx(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
         if suffix in {".xlsx", ".xls"}:
-            return self._parse_xlsx(path_obj, doc_title=doc_title), filename
+            doc, images = self._parse_xlsx(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
         if suffix in {".html", ".htm"}:
-            return self._parse_html(path_obj, doc_title=doc_title), filename
+            doc, images = self._parse_html(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
         if suffix in {".txt", ".md", ".json", ".csv", ".tsv", ".xml"}:
-            return self._parse_text(path_obj, doc_title=doc_title), filename
+            doc, images = self._parse_text(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
-        # Default fallback: try reading as text
+        # Default fallback: try reading as text, else image
         try:
-            return self._parse_text(path_obj, doc_title=doc_title), filename
+            doc, images = self._parse_text(path_obj, doc_title=doc_title)
+            return doc, filename, images
         except Exception:
-            return self._parse_image(path_obj, doc_title=doc_title), filename
+            doc, images = self._parse_image(path_obj, doc_title=doc_title)
+            return doc, filename, images
 
     def parse_bytes(
         self,
         content: bytes,
         filename: str,
         suffix: str | None = None,
-    ) -> tuple[DoclingDocument, str]:
+    ) -> tuple[DoclingDocument, str, dict[int, bytes]]:
         """Safely write bytes to a temporary file, parse with Docling, and remove the file."""
         if not suffix:
             suffix = Path(filename).suffix or ".tmp"
@@ -483,8 +375,8 @@ class DoclingParser:
 
         try:
             temp_path.write_bytes(content)
-            doc, _ = self.parse_path(temp_path, display_name=filename)
-            return doc, filename
+            doc, actual_name, images = self.parse_path(temp_path, display_name=filename)
+            return doc, actual_name, images
         finally:
             if temp_path.exists():
                 try:

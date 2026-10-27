@@ -191,7 +191,15 @@ class ExtractionService:
             target_chunk_text=best_match.chunk.text,
             expected_type=expected_type,
         )
-        snippet_text = _truncate_snippet(best_match.chunk.text)
+        if best_match.chunk.image_bytes is not None and (
+            "[Görsel Doküman" in best_match.chunk.text
+            or "[Görsel Belge Sayfası" in best_match.chunk.text
+        ):
+            doc_ref = best_match.chunk.doc_name
+            pg = f" (Sayfa {best_match.chunk.page_number})" if best_match.chunk.page_number else ""
+            snippet_text = f"Görsel Doküman {doc_ref}{pg} doğrudan incelendi (Değer: '{raw_val}')"
+        else:
+            snippet_text = _truncate_snippet(best_match.chunk.text)
         evidence = ExtractionEvidence(
             document=best_match.chunk.doc_name,
             page=best_match.chunk.page_number,
@@ -225,10 +233,21 @@ class ExtractionService:
 
         _log_rag_context(item.key, item.description, search_query, matches)
 
+        # Select at most 2 most relevant visual page chunks to prevent LLM context flooding
+        top_visual_ids = {
+            m.chunk.chunk_id for m in [m for m in matches if m.chunk.image_bytes is not None][:2]
+        }
+        image_bytes_list: list[bytes] = [
+            m.chunk.image_bytes
+            for m in canonical_matches
+            if m.chunk.image_bytes is not None and m.chunk.chunk_id in top_visual_ids
+        ]
+
         llm_result = await self.llm_client.extract_item(
             query_key=item.key,
             query_description=item.description,
             context=context_str,
+            image_bytes_list=image_bytes_list if image_bytes_list else None,
             expected_type=item.type,
         )
 

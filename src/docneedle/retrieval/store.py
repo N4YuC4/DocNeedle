@@ -66,12 +66,26 @@ class SessionVectorStore:
         if not chunks:
             return
 
-        logger.info(f"--> [VECTOR STORE] Embedding {len(chunks)} chunks in RAM...")
+        logger.info(f"--> [VECTOR STORE] Embedding {len(chunks)} chunks in RAM (text/images)...")
         self.chunks.extend(chunks)
 
-        # Compute embeddings for new chunks in RAM (incremental)
-        new_texts = [c.text for c in chunks]
-        new_embs = self.embedder.embed_texts(new_texts, is_query=False)
+        # Compute embeddings for new chunks in RAM (supporting multimodal visual & text)
+        new_embs_list: list[np.ndarray] = []
+        for c in chunks:
+            if c.image_bytes is not None:
+                img_emb = self.embedder.embed_images([c.image_bytes])
+                new_embs_list.append(img_emb)
+            else:
+                txt_emb = self.embedder.embed_texts(
+                    [c.text], is_query=False, doc_names=[c.doc_name]
+                )
+                new_embs_list.append(txt_emb)
+
+        new_embs = (
+            np.vstack(new_embs_list)
+            if new_embs_list
+            else np.zeros((0, self.embedder.dimension), dtype=np.float32)
+        )
 
         if self.embeddings is None or len(self.embeddings) == 0:
             self.embeddings = new_embs

@@ -13,7 +13,9 @@ class MockDeterministicEmbedder(BaseEmbedder):
     def __init__(self, dimension: int = 128) -> None:
         self.dimension = dimension
 
-    def embed_texts(self, texts: list[str], is_query: bool = False) -> np.ndarray:
+    def embed_texts(
+        self, texts: list[str], is_query: bool = False, doc_names: list[str] | None = None
+    ) -> np.ndarray:
         embeddings = []
         for text in texts:
             vec = np.zeros(self.dimension, dtype=np.float32)
@@ -25,6 +27,15 @@ class MockDeterministicEmbedder(BaseEmbedder):
                 vec /= norm
             else:
                 vec[0] = 1.0
+            embeddings.append(vec)
+        return np.array(embeddings, dtype=np.float32)
+
+    def embed_images(self, image_bytes_list: list[bytes]) -> np.ndarray:
+        embeddings = []
+        for img_b in image_bytes_list:
+            vec = np.zeros(self.dimension, dtype=np.float32)
+            h = len(img_b) % self.dimension
+            vec[h] = 1.0
             embeddings.append(vec)
         return np.array(embeddings, dtype=np.float32)
 
@@ -162,33 +173,41 @@ def test_get_embedder_missing_model_raises_filenotfound(
     monkeypatch.setattr(emb_mod, "_embedder_instance", None)
     with pytest.raises(FileNotFoundError) as exc_info:
         emb_mod.get_embedder()
-    assert "No Harrier-OSS embedding" in str(exc_info.value)
+    assert "EmbeddingGemma-2 model not found" in str(exc_info.value)
 
 
-def test_onnx_harrier_embedder_lifecycle() -> None:
-    """Verify Harrier embedder text and query embedding, dimension, and L2 normalization."""
-    from docneedle.config import settings
+def test_embeddinggemma2_embedder_lifecycle() -> None:
+    """Verify EmbeddingGemma-2 text, query, and image embedding, 768-dim, and L2 normalization."""
+    import io
+
+    from PIL import Image
+
     from docneedle.retrieval.embedder import (
-        LlamaCppHarrierEmbedder,
-        OnnxHarrierEmbedder,
+        BaseEmbedder,
         get_embedder,
     )
 
     emb = get_embedder()
-    if settings.gpu_enabled:
-        assert isinstance(emb, LlamaCppHarrierEmbedder)
-    else:
-        assert isinstance(emb, OnnxHarrierEmbedder)
+    assert isinstance(emb, BaseEmbedder)
+
     texts = ["Ahmet Yılmaz", "Kira Sözleşmesi 25.000 TL", ""]
     embs = emb.embed_texts(texts)
-    assert embs.shape == (3, 512)
+    assert embs.shape == (3, 768)
     assert np.all(embs[2] == 0.0)
     assert abs(float(np.linalg.norm(embs[0])) - 1.0) < 1e-4
     assert abs(float(np.linalg.norm(embs[1])) - 1.0) < 1e-4
 
     q_vec = emb.embed_query("Kira bedeli")
-    assert q_vec.shape == (512,)
+    assert q_vec.shape == (768,)
     assert abs(float(np.linalg.norm(q_vec)) - 1.0) < 1e-4
+
+    # Test multimodal image embedding
+    test_img = Image.new("RGB", (64, 64), color="blue")
+    buf = io.BytesIO()
+    test_img.save(buf, format="JPEG")
+    img_embs = emb.embed_images([buf.getvalue()])
+    assert img_embs.shape == (1, 768)
+    assert abs(float(np.linalg.norm(img_embs[0])) - 1.0) < 1e-4
 
 
 def test_store_clear_reclaims_memory(
@@ -213,5 +232,41 @@ def test_store_clear_reclaims_memory(
     # store.clear() frees structures and calls gc.collect to reclaim native C memory
     store.clear()
     assert gc_called
+    assert len(store.chunks) == 0
+    assert store.embeddings is None
+
+
+def test_session_vector_store_with_image_chunks() -> None:
+    embedder = MockDeterministicEmbedder(dimension=128)
+    store = SessionVectorStore(embedder=embedder)
+
+    img_chunk = DocumentChunk(
+        chunk_id="img_1",
+        doc_id="doc_img",
+        doc_name="fatura.png",
+        chunk_index=0,
+        text="[Görsel Doküman - fatura.png]",
+        page_number=1,
+        image_bytes=b"fake_png_data_12345",
+    )
+    txt_chunk = DocumentChunk(
+        chunk_id="txt_1",
+        doc_id="doc_txt",
+        doc_name="metin.md",
+        chunk_index=0,
+        text="Normal metin içeriği burada.",
+        page_number=1,
+    )
+
+    store.add_chunks([img_chunk, txt_chunk])
+    assert len(store.chunks) == 2
+    assert store.embeddings is not None
+    assert store.embeddings.shape == (2, 128)
+
+    results = store.search("fatura", top_k=2)
+    assert len(results) == 2
+    assert any(r.chunk.chunk_id == "img_1" for r in results)
+
+    store.clear()
     assert len(store.chunks) == 0
     assert store.embeddings is None

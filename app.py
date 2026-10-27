@@ -53,13 +53,14 @@ logger = logging.getLogger("DocNeedleSpace")
 logging.basicConfig(level=logging.INFO)
 
 # 1. Automatic model bootstrapping for Hugging Face Spaces and local startup
-try:
-    from scripts.download_models import ensure_all_models_present
+if os.environ.get("SKIP_MODEL_BOOTSTRAP", "").lower() not in ("1", "true"):
+    try:
+        from scripts.download_models import ensure_all_models_present
 
-    logger.info("Checking and bootstrapping quantized models...")
-    ensure_all_models_present(settings.model_storage_dir)
-except Exception as e:
-    logger.warning(f"Automatic model download check failed or bypassed: {e}")
+        logger.info("Checking and bootstrapping quantized models...")
+        ensure_all_models_present(settings.model_storage_dir)
+    except Exception as e:
+        logger.warning(f"Automatic model download check failed or bypassed: {e}")
 
 
 CUSTOM_CSS = """
@@ -812,14 +813,14 @@ def _estimate_extraction_duration(
     *args: Any,
     **kwargs: Any,
 ) -> int:
-    """Dynamically estimate ZeroGPU reservation duration based on uploaded files and cache."""
+    """Dynamically estimate ZeroGPU reservation duration safely within platform tier caps."""
     if session_chunks:
-        return 60
+        return 45
     file_list = files if isinstance(files, list) else ([files] if files else [])
     num_files = len(file_list)
     if num_files <= 1:
-        return 90
-    return min(180, 60 + num_files * 30)
+        return 60
+    return min(90, 45 + num_files * 10)
 
 
 @gpu_decorator(duration=_estimate_extraction_duration)

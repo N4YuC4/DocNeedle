@@ -1,87 +1,13 @@
-"""Tests for RapidOCR engine, layout reconstruction, Turkish normalization, and cache."""
+"""Tests for visual and multimodal ingestion, CMap readability validation, and cache."""
 
-from unittest.mock import MagicMock
+import io
 
-import numpy as np
 from PIL import Image
 
 from docneedle.ingest.cache import DocumentIngestionCache, global_ingestion_cache
 from docneedle.ingest.models import DocumentChunk, IngestResult
-from docneedle.ingest.ocr_engine import (
-    EphemeralRapidOCREngine,
-    fit_image,
-    format_ocr_layout,
-    normalize_turkish_ocr_artifacts,
-)
 from docneedle.ingest.parser import _is_extracted_text_readable
 from docneedle.ingest.service import IngestionService
-
-
-class TestFitImage:
-    """Test image resolution scaling before RapidOCR inference."""
-
-    def test_fit_image_downscale(self) -> None:
-        img = Image.new("RGB", (4096, 2048), color="white")
-        fitted = fit_image(img, longest_edge=2048)
-        assert max(fitted.size) == 2048
-        assert fitted.size == (2048, 1024)
-
-    def test_fit_image_never_upscales(self) -> None:
-        img = Image.new("RGB", (800, 600), color="white")
-        fitted = fit_image(img, longest_edge=2048)
-        assert fitted.size == (800, 600)
-
-
-class TestOcrLayoutAndNormalization:
-    """Test spatial line reconstruction and conditional Turkish artifact normalization."""
-
-    def test_format_ocr_layout_prevents_word_gluing_and_separates_columns(self) -> None:
-        # Box 1 and Box 2 touch closely on line 1; Box 3 is a separate column on line 1;
-        # Box 4 is stacked directly below Box 1.
-        boxes = np.array(
-            [
-                [[10, 10], [80, 10], [80, 30], [10, 30]],  # "Kimlik No"
-                [[82, 10], [180, 10], [180, 30], [82, 30]],  # "12757385200" (tiny gap=2)
-                [[260, 10], [380, 10], [380, 30], [260, 30]],  # "Hüseyin ABAZ" (wide gap=80)
-                [[10, 45], [120, 45], [120, 65], [10, 65]],  # "Baba Adı: Ömer" (next line)
-            ],
-            dtype=np.float32,
-        )
-        txts = ("Kimlik No", "12757385200", "Hüseyin ABAZ", "Baba Adı: Ömer")
-        out = format_ocr_layout(boxes, txts)
-
-        # Must have a space between touching boxes (never "Kimlik No12757385200")
-        assert "Kimlik No 12757385200" in out
-        # Must separate wide columns with " | "
-        assert "12757385200 | Hüseyin ABAZ" in out
-        # Next line must be on a separate line
-        assert "\nBaba Adı: Ömer" in out
-
-    def test_format_ocr_layout_prevents_vertical_stack_merging(self) -> None:
-        # Two boxes with close center_y but overlapping X coordinates (stacked cell label & value)
-        boxes = np.array(
-            [
-                [[20, 10], [140, 10], [140, 26], [20, 26]],  # "Adı Soyadı"
-                [[20, 22], [140, 22], [140, 38], [20, 38]],  # "Hüseyin ABAZ"
-            ],
-            dtype=np.float32,
-        )
-        txts = ("Adı Soyadı", "Hüseyin ABAZ")
-        out = format_ocr_layout(boxes, txts)
-        assert out == "Adı Soyadı\nHüseyin ABAZ"
-
-    def test_normalize_turkish_ocr_artifacts(self) -> None:
-        raw_turkish = (
-            "T.C. İÇÍSLERÍ BAKANLIČI\nHacı Kamil KADIOČLU Müdür\nDečerli Kaġit bedeli karşiliġı"
-        )
-        cleaned = normalize_turkish_ocr_artifacts(raw_turkish)
-        assert "T.C. İÇİSLERİ BAKANLIĞI" in cleaned
-        assert "Hacı Kamil KADIOĞLU" in cleaned
-        assert "Değerli Kağit bedeli karşiliğı" in cleaned
-
-    def test_normalize_preserves_non_turkish_text(self) -> None:
-        czech_text = "Česká republika a Španělsko ÍNDICE"
-        assert normalize_turkish_ocr_artifacts(czech_text) == czech_text
 
 
 class TestPdfReadabilityValidation:
@@ -169,67 +95,20 @@ class TestIngestionCache:
         global_ingestion_cache.clear()
 
 
-class TestEphemeralRapidOCRTranscription:
-    """Test EphemeralRapidOCREngine output handling and empty image safety."""
+class TestVisualIngestionChunks:
+    """Test OCR-free ingestion preserving image_bytes on DocumentChunk."""
 
-    def test_transcribe_with_markdown_output(self, monkeypatch) -> None:
-        mock_output = MagicMock()
-        mock_output.boxes = None
-        mock_output.txts = (
-            "FATURA / INVOICE",
-            "Toplam Tutar: 15.000 TL",
-            "KDV Dahil tutardır.",
-        )
-        mock_output.to_markdown.return_value = (
-            "FATURA / INVOICE\n\nToplam Tutar: 15.000 TL  KDV Dahil tutardır."
-        )
+    def test_image_file_ingests_with_image_bytes(self) -> None:
+        img = Image.new("RGB", (200, 100), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        png_bytes = buf.getvalue()
 
-        mock_rapid_inst = MagicMock(return_value=mock_output)
-        monkeypatch.setattr("rapidocr.RapidOCR", MagicMock(return_value=mock_rapid_inst))
+        service = IngestionService()
+        result = service.ingest_bytes(content=png_bytes, filename="test_doc.png")
 
-        img = Image.new("RGB", (500, 500), color="white")
-        with EphemeralRapidOCREngine() as ocr:
-            text = ocr.transcribe_image(img)
-            assert "FATURA / INVOICE" in text
-            assert "Toplam Tutar: 15.000 TL" in text
-            assert "KDV Dahil tutardır." in text
-
-    def test_transcribe_empty_image_returns_empty_string(self, monkeypatch) -> None:
-        mock_output = MagicMock()
-        mock_output.boxes = None
-        mock_output.txts = None
-        mock_output.to_markdown.return_value = "没有检测到任何文本。"
-
-        mock_rapid_inst = MagicMock(return_value=mock_output)
-        monkeypatch.setattr("rapidocr.RapidOCR", MagicMock(return_value=mock_rapid_inst))
-
-        arr = np.zeros((100, 100, 3), dtype=np.uint8)
-        with EphemeralRapidOCREngine() as ocr:
-            text = ocr.transcribe_image(arr)
-            assert text == ""
-
-    def test_ephemeral_engine_reclaims_memory_on_exit(self, monkeypatch) -> None:
-        import gc
-
-        gc_called = False
-
-        def mock_gc():
-            nonlocal gc_called
-            gc_called = True
-            return 0
-
-        monkeypatch.setattr(gc, "collect", mock_gc)
-
-        mock_output = MagicMock()
-        mock_output.boxes = None
-        mock_output.txts = ("TEST",)
-        monkeypatch.setattr(
-            "rapidocr.RapidOCR", MagicMock(return_value=MagicMock(return_value=mock_output))
-        )
-
-        with EphemeralRapidOCREngine() as ocr:
-            assert ocr.ocr is not None
-
-        # gc.collect MUST be called on exit to evict native ONNX session and tensors immediately
-        assert gc_called
-        assert ocr.ocr is None
+        assert result.total_chunks >= 1
+        chunk = result.chunks[0]
+        assert chunk.image_bytes is not None
+        assert len(chunk.image_bytes) > 0
+        assert "Görsel Doküman" in chunk.text

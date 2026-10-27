@@ -14,6 +14,7 @@ class LLMClient:
         query_key: str,
         query_description: str,
         context: str,
+        image_bytes_list: list[bytes] | None = None,
         expected_type: str | None = None,
         enable_thinking: bool | None = None,
     ) -> LLMExtractionResult:
@@ -24,6 +25,7 @@ class LLMClient:
             query_key=query_key,
             query_description=query_description,
             context=context,
+            image_bytes_list=image_bytes_list,
             expected_type=expected_type,
             enable_thinking=enable_thinking,
         )
