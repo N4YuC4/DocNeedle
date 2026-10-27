@@ -64,71 +64,22 @@ async def _read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str,
 
 
 @gpu_decorator(duration=60)
-def _sync_extract_session(
-    files_data: list[tuple[str, bytes]],
+def _sync_llm_extract(
     items: list[ExtractionItemQuery],
+    store: SessionVectorStore,
     enable_reranker: bool | None,
 ) -> ExtractionResponse:
-    """Execute complete document ingestion and extraction synchronously with ZeroGPU leasing."""
+    """Execute LLM neural extraction synchronously within the ZeroGPU lease."""
     import concurrent.futures
 
-    request_start = time.perf_counter()
-    ingestion_service = IngestionService()
     extraction_service = ExtractionService()
-    store = SessionVectorStore()
-
-    try:
-        filenames = [fname for fname, _ in files_data]
-        query_keys = [it.key for it in items]
-        logger.info(f"[EXTRACTION SESSION] Files: {filenames} | Queries: {query_keys}")
-        all_chunks: list[DocumentChunk] = []
-
-        with ingestion_service.parser:
-            for idx, (filename, content) in enumerate(files_data, 1):
-                kb_size = len(content) / 1024
-                logger.info(
-                    f"--> [{idx}/{len(files_data)}] Parsing: {filename} ({kb_size:.1f} KB)..."
-                )
-                ingest_result = ingestion_service.ingest_bytes(
-                    content=content,
-                    filename=filename,
-                )
-                all_chunks.extend(ingest_result.chunks)
-                logger.info(
-                    f"    Extracted {len(ingest_result.chunks)} chunks (Total: {len(all_chunks)})."
-                )
-
-        if not all_chunks:
-            raise HTTPException(
-                status_code=422,
-                detail="Could not extract any readable text from the uploaded documents.",
-            )
-
-        logger.info(
-            f"--> Indexing {len(all_chunks)} chunks into vector store & building BM25 index..."
-        )
-        store.add_chunks(all_chunks)
-        logger.info(f"[INGESTION COMPLETE] Total Chunks indexed in RAM: {len(store.chunks)}")
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            response = pool.submit(
-                asyncio.run,
-                extraction_service.extract_items(
-                    items=items, store=store, enable_reranker=enable_reranker
-                ),
-            ).result()
-
-        total_time_ms = round((time.perf_counter() - request_start) * 1000.0, 2)
-        response.processing_time_ms = total_time_ms
-        logger.info(
-            f"[SESSION COMPLETE] Found {response.found_items}/{response.total_items} "
-            f"in {response.processing_time_ms:.1f}ms"
-        )
-        return response
-
-    finally:
-        # Guarantee privacy: wipe RAM vectors and chunks immediately after completion
-        store.clear()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(
+            asyncio.run,
+            extraction_service.extract_items(
+                items=items, store=store, enable_reranker=enable_reranker
+            ),
+        ).result()
 
 
 @router.post("/extract", response_model=ExtractionResponse)
@@ -152,4 +103,56 @@ async def extract_from_documents(
     """Extract structured data items from documents in a single privacy-preserving session."""
     files_data = await _read_and_validate_uploads(files)
     items = _parse_extraction_schema(items_schema)
-    return await asyncio.to_thread(_sync_extract_session, files_data, items, enable_reranker)
+    request_start = time.perf_counter()
+    ingestion_service = IngestionService()
+    store = SessionVectorStore()
+
+    try:
+        filenames = [fname for fname, _ in files_data]
+        query_keys = [it.key for it in items]
+        logger.info(f"[EXTRACTION SESSION] Files: {filenames} | Queries: {query_keys}")
+        all_chunks: list[DocumentChunk] = []
+
+        with ingestion_service.parser:
+            for idx, (filename, content) in enumerate(files_data, 1):
+                kb_size = len(content) / 1024
+                logger.info(
+                    f"--> [{idx}/{len(files_data)}] Parsing: {filename} ({kb_size:.1f} KB)..."
+                )
+                ingest_result = await asyncio.to_thread(
+                    ingestion_service.ingest_bytes,
+                    content=content,
+                    filename=filename,
+                )
+                all_chunks.extend(ingest_result.chunks)
+                logger.info(
+                    f"    Extracted {len(ingest_result.chunks)} chunks (Total: {len(all_chunks)})."
+                )
+
+        if not all_chunks:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not extract any readable text from the uploaded documents.",
+            )
+
+        logger.info(
+            f"--> Indexing {len(all_chunks)} chunks into vector store & building BM25 index..."
+        )
+        await asyncio.to_thread(store.add_chunks, all_chunks)
+        logger.info(f"[INGESTION COMPLETE] Total Chunks indexed in RAM: {len(store.chunks)}")
+
+        # Execute only the LLM inference step within the ZeroGPU lease
+        response = await asyncio.to_thread(
+            _sync_llm_extract, items, store, enable_reranker
+        )
+        total_time_ms = round((time.perf_counter() - request_start) * 1000.0, 2)
+        response.processing_time_ms = total_time_ms
+        logger.info(
+            f"[SESSION COMPLETE] Found {response.found_items}/{response.total_items} "
+            f"in {response.processing_time_ms:.1f}ms"
+        )
+        return response
+
+    finally:
+        # Guarantee privacy: wipe RAM vectors and chunks immediately after completion
+        store.clear()
