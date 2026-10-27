@@ -51,23 +51,29 @@ def _build_reranker_tokens(
 class Qwen3Reranker:
     """Reranker using Qwen3-Reranker-0.6B GGUF with llama.cpp."""
 
-    def __init__(self, model_path: str | Path | None = None) -> None:
-        from docneedle.cuda_compat import preload_cuda_runtime_libs
+    def __init__(
+        self,
+        model_path: str | Path | None = None,
+        n_gpu_layers: int = 0,
+    ) -> None:
+        if n_gpu_layers != 0:
+            from docneedle.cuda_compat import preload_cuda_runtime_libs
 
-        preload_cuda_runtime_libs()
+            preload_cuda_runtime_libs()
         import llama_cpp
 
         if model_path is None:
             model_path = self._resolve_model_path()
 
         self.model_path = str(model_path)
+        self.n_gpu_layers = n_gpu_layers
         logger.info(
             f"Loading Qwen3-Reranker from {self.model_path} "
-            f"(gpu_layers={settings.effective_gpu_layers})"
+            f"(gpu_layers={self.n_gpu_layers})"
         )
         self.llm = llama_cpp.Llama(
             model_path=self.model_path,
-            n_gpu_layers=settings.effective_gpu_layers,
+            n_gpu_layers=self.n_gpu_layers,
             n_ctx=settings.reranker_n_ctx,
             n_threads=settings.cpu_threads,
             n_threads_batch=settings.cpu_threads_batch,
