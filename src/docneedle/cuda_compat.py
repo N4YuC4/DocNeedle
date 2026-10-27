@@ -12,8 +12,21 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# ZeroGPU decorator compatibility (applied before CUDA imports)
+try:
+    import spaces  # type: ignore
+
+    gpu_decorator = spaces.GPU
+except Exception:
+
+    def gpu_decorator(*args: Any, **kwargs: Any) -> Any:
+        if args and callable(args[0]):
+            return args[0]
+        return lambda f: f
 
 _cuda_preloaded = False
 
