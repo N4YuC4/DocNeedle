@@ -106,8 +106,8 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         self._lib.docneedle_embed_free.restype = None
         self._lib.docneedle_embed_free.argtypes = [ctypes.c_void_p]
 
-        # EmbeddingGemma-2 is an ultra-compact 271M model (152 MB). CPU execution
-        # guarantees robust gemma-embedding2 support and frees 100% GPU VRAM for Gemma LLM.
+        # EmbeddingGemma-2 is an ultra-compact 271M model (152 MB). The SigLIP vision
+        # tower is the bottleneck (~14s/page on shared ZeroGPU CPUs), so offload to GPU.
         threads = min(8, max(1, settings.cpu_threads))
         self._ctx = self._lib.docneedle_embed_init(
             self.model_path.encode("utf-8"),
@@ -235,6 +235,6 @@ def get_embedder() -> BaseEmbedder:
             model_path=model_path,
             mmproj_path=mmproj_path,
             dimension=settings.embedding_dimension,
-            n_gpu_layers=0,
+            n_gpu_layers=settings.effective_gpu_layers,
         )
         return _embedder_instance
