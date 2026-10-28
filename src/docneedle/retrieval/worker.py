@@ -5,6 +5,7 @@ guarantees complete symbol isolation from llama-cpp-python, eliminating
 cross-version DSO symbol collisions while providing fast in-memory IPC.
 """
 
+import atexit
 import logging
 import multiprocessing as mp
 import threading
@@ -110,6 +111,7 @@ class IsolatedEmbeddingClient(BaseEmbedder):
         self._proc: mp.Process | None = None
         self._pipe: Any = None
         self._start_worker()
+        atexit.register(self.close)
 
     def _start_worker(self) -> None:
         cur_proc = mp.current_process()
@@ -135,7 +137,7 @@ class IsolatedEmbeddingClient(BaseEmbedder):
             self._proc.start()
             child_pipe.close()
 
-            status, err = self._pipe.recv()
+            status, err = self._recv()
             if status != "READY":
                 self.close()
                 raise RuntimeError(f"Failed to initialize isolated embedder worker: {err}")
@@ -153,7 +155,7 @@ class IsolatedEmbeddingClient(BaseEmbedder):
         with self._lock:
             self._ensure_alive()
             self._pipe.send(("TEXTS", (texts, is_query, doc_names)))
-            status, res = self._pipe.recv()
+            status, res = self._recv()
             if status != "OK":
                 raise RuntimeError(f"Embedder worker error: {res}")
             return res
@@ -167,10 +169,25 @@ class IsolatedEmbeddingClient(BaseEmbedder):
         with self._lock:
             self._ensure_alive()
             self._pipe.send(("IMAGES", (image_bytes_list,)))
-            status, res = self._pipe.recv()
+            status, res = self._recv()
             if status != "OK":
                 raise RuntimeError(f"Embedder worker error: {res}")
             return res
+
+    def _recv(self) -> tuple[str, Any]:
+        """Receive a worker reply, failing fast if the worker process dies.
+
+        A native crash (e.g. SIGSEGV inside llama.cpp) kills the child without
+        sending a reply; a plain blocking recv() would then hang forever.
+        """
+        while not self._pipe.poll(timeout=0.5):
+            if self._proc is None or not self._proc.is_alive():
+                exitcode = self._proc.exitcode if self._proc is not None else None
+                self._proc = None
+                raise RuntimeError(
+                    f"Isolated embedder worker died unexpectedly (exit code: {exitcode})."
+                )
+        return self._pipe.recv()
 
     def _ensure_alive(self) -> None:
         if self._proc is None or not self._proc.is_alive():
