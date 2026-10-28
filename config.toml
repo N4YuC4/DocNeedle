@@ -63,10 +63,10 @@ doc_instruction = "title: {doc_name} | text: {text}"
 [retrieval]
 top_k = 10
 rrf_constant = 60
-reranker_enabled = true
+reranker_enabled = false
 reranker_model = "Qwen/Qwen3-Reranker-0.6B"
-reranker_candidate_k = 10
-rerank_top_k = 5
+reranker_candidate_k = 4
+rerank_top_k = 3
 max_chunks_per_document = 2
 reranker_instruction = "Given a web search query, retrieve relevant passages that answer the query"
 

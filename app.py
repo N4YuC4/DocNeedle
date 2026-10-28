@@ -807,23 +807,7 @@ async def _async_perform_extraction_ui(
                 pass
 
 
-def _estimate_extraction_duration(
-    files: Any = None,
-    session_chunks: list[Any] | None = None,
-    *args: Any,
-    **kwargs: Any,
-) -> int:
-    """Dynamically estimate ZeroGPU reservation duration safely within platform tier caps."""
-    if session_chunks:
-        return 45
-    file_list = files if isinstance(files, list) else ([files] if files else [])
-    num_files = len(file_list)
-    if num_files <= 1:
-        return 60
-    return min(90, 45 + num_files * 10)
-
-
-@gpu_decorator(duration=_estimate_extraction_duration)
+@gpu_decorator(duration=60)
 def perform_extraction_ui(
     files: Any,
     session_chunks: list[Any] | None,

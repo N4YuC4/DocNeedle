@@ -158,16 +158,19 @@ class Qwen3Reranker:
 
         scored_candidates: list[SearchResult] = []
         for c in candidates:
-            eval_text = c.chunk.text
-            if c.chunk.image_bytes is not None:
-                doc_title = Path(c.chunk.doc_name).stem.replace("_", " ").replace("-", " ")
-                eval_text = f"Belge: {doc_title} (Sayfa {c.chunk.page_number or 1})\n{c.chunk.text}"
-
-            rel_score = self.score(
-                query=query,
-                doc_text=eval_text,
-                instruction=instr,
+            # If chunk is purely visual lacking text, preserve cross-modal dense score directly
+            # without wasting CPU cycles running a text cross-encoder on placeholder text.
+            is_visual_only = c.chunk.image_bytes is not None and c.chunk.text.startswith(
+                ("[Görsel", "[Visual")
             )
+            if is_visual_only:
+                rel_score = (float(c.dense_score or 0.0) - 0.5) * 5.0
+            else:
+                rel_score = self.score(
+                    query=query,
+                    doc_text=c.chunk.text,
+                    instruction=instr,
+                )
 
             # Preserve cross-modal dense semantic signal for visual page chunks
             if c.chunk.image_bytes is not None and c.dense_score is not None:

@@ -193,15 +193,12 @@ class Settings(BaseSettings):
     rrf_constant: int = 60
     reranker_enabled: bool = Field(
         default_factory=lambda: (
-            bool(os.environ.get("SPACES_ZERO_GPU"))
-            or os.environ.get("SYSTEM") == "spaces"
-            or os.environ.get("GPU_ENABLED", "").lower() in ("1", "true")
-            or os.environ.get("RERANKER_ENABLED", "").lower() in ("1", "true")
+            os.environ.get("RERANKER_ENABLED", "").lower() in ("1", "true")
         )
     )
     reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
-    reranker_candidate_k: int = 10
-    rerank_top_k: int = 5
+    reranker_candidate_k: int = 4
+    rerank_top_k: int = 3
     max_chunks_per_document: int = 2
     reranker_instruction: str = (
         "Given a web search query, retrieve relevant passages that answer the query"

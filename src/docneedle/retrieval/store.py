@@ -192,11 +192,11 @@ class SessionVectorStore:
             if self.reranker is not None:
                 candidate_k = min(
                     len(scored_results),
-                    max(target_top_k, settings.reranker_candidate_k),
+                    settings.reranker_candidate_k,
                 )
                 candidates = scored_results[:candidate_k]
                 reranked = self.reranker.rerank(
-                    query=query, candidates=candidates, top_k=candidate_k
+                    query=query, candidates=candidates, top_k=target_top_k
                 )
                 return _apply_document_diversity(
                     reranked, top_k=target_top_k, max_per_doc=max_per_doc
