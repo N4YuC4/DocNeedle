@@ -44,14 +44,10 @@ async def root() -> dict[str, str]:
 async def health_check() -> dict[str, object]:
     """Health check endpoint detailing runtime environment and GIL state."""
     gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
-    try:
-        import llama_cpp
-        llama_gpu = bool(llama_cpp.llama_supports_gpu_offload())
-    except Exception as e:
-        llama_gpu = str(e)
 
     try:
         import torch
+
         torch_cuda = bool(torch.cuda.is_available())
     except Exception as e:
         torch_cuda = str(e)
@@ -64,7 +60,6 @@ async def health_check() -> dict[str, object]:
         "free_threaded": not gil_enabled,
         "gil_enabled": gil_enabled,
         "hardware": {
-            "llama_cpp_gpu": llama_gpu,
             "torch_cuda": torch_cuda,
             "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
             "spaces_zero_gpu": os.environ.get("SPACES_ZERO_GPU"),
