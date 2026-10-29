@@ -1,6 +1,7 @@
 """Local in-process GGUF LLM engine for information extraction."""
 
 import logging
+import os
 import re
 import threading
 from pathlib import Path
