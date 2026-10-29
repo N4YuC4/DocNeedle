@@ -59,6 +59,7 @@ if os.environ.get("SKIP_MODEL_BOOTSTRAP", "").lower() not in ("1", "true"):
 
         logger.info("Checking and bootstrapping quantized models...")
         ensure_all_models_present(settings.model_storage_dir)
+        os.environ["SKIP_MODEL_BOOTSTRAP"] = "1"
     except Exception as e:
         logger.warning(f"Automatic model download check failed or bypassed: {e}")
 

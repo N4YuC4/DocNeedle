@@ -167,6 +167,12 @@ def download_chunker_tokenizer(tokenizer_model: str = "Qwen/Qwen3-Reranker-0.6B"
     try:
         from transformers import AutoTokenizer
 
+        try:
+            AutoTokenizer.from_pretrained(tokenizer_model, local_files_only=True)
+            return
+        except Exception:
+            pass
+
         print(f"\nChecking/Downloading chunker tokenizer ({tokenizer_model})...")
         AutoTokenizer.from_pretrained(tokenizer_model)
         print("Chunker tokenizer is verified and cached.")
