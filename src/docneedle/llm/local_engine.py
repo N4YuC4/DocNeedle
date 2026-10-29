@@ -631,7 +631,18 @@ class LocalLLMEngine:
             if not self.model_path.exists():
                 raise FileNotFoundError(f"GGUF model file not found at: {self.model_path}")
 
-        logger.info("Loading local LLM (%s) from %s...", self.model_path.name, self.model_path)
+        import llama_cpp
+
+        supports_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
+        eff_layers = settings.effective_gpu_layers
+        logger.info(
+            "Loading local LLM (%s) from %s (n_gpu_layers=%d, gpu_supported=%s, cuda_env=%s)...",
+            self.model_path.name,
+            self.model_path,
+            eff_layers,
+            supports_gpu,
+            os.environ.get("CUDA_VISIBLE_DEVICES"),
+        )
 
         self.mmproj_path = _resolve_llm_mmproj_path()
         chat_handler = None
@@ -640,7 +651,7 @@ class LocalLLMEngine:
                 from llama_cpp.llama_chat_format import Gemma4ChatHandler
 
                 chat_handler = Gemma4ChatHandler(
-                    clip_model_path=str(self.mmproj_path), verbose=False
+                    clip_model_path=str(self.mmproj_path), verbose=True
                 )
                 logger.info("Multimodal vision support enabled with %s", self.mmproj_path)
             except Exception as e:
@@ -657,7 +668,7 @@ class LocalLLMEngine:
             draft_model=draft_model,
             logits_all=logits_all,
             n_ctx=self.n_ctx,
-            n_gpu_layers=settings.effective_gpu_layers,
+            n_gpu_layers=eff_layers,
             n_threads=settings.cpu_threads,
             n_threads_batch=settings.cpu_threads_batch,
             n_batch=settings.model_n_batch,
@@ -666,7 +677,7 @@ class LocalLLMEngine:
             flash_attn=settings.model_flash_attn,
             use_mmap=True,
             use_mlock=False,
-            verbose=False,
+            verbose=True,
         )
         if not logits_all and hasattr(self.llm, "scores"):
             import numpy as np
@@ -799,6 +810,15 @@ class LocalLLMEngine:
                 )
 
             raw_content = res["choices"][0]["message"]["content"] or ""
+            usage = res.get("usage", {})
+            finish_reason = res["choices"][0].get("finish_reason")
+            logger.info(
+                "--> [LLM Multimodal Complete] field '%s' | finish=%s | tokens=%s | raw='%s'",
+                query_key,
+                finish_reason,
+                usage,
+                raw_content.replace("\n", "\\n")[:120],
+            )
             thinking, raw_answer = _parse_model_response(
                 raw_content,
                 started_in_thought=use_thinking,
