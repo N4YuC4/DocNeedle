@@ -1,12 +1,15 @@
 import asyncio
-import json
 import logging
 import time
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from docneedle.config import settings
+from docneedle.api.validation import (
+    parse_extraction_schema,
+    read_and_validate_uploads,
+    validate_file_size,
+)
 from docneedle.cuda_compat import gpu_decorator
 from docneedle.extraction.schemas import ExtractionItemQuery, ExtractionResponse
 from docneedle.extraction.service import ExtractionService
@@ -18,50 +21,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", tags=["Extraction"])
 
-
-def _parse_extraction_schema(items_schema: str) -> list[ExtractionItemQuery]:
-    """Parse and validate extraction schema JSON payload into query models."""
-    try:
-        raw_items = json.loads(items_schema)
-        if isinstance(raw_items, dict):
-            raw_items = [raw_items]
-        items = [ExtractionItemQuery.model_validate(it) for it in raw_items]
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid schema JSON format: {e}") from e
-
-    if not items:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one extraction item must be provided in schema.",
-        )
-    return items
-
-
-def _validate_file_size(filename: str, content: bytes, max_bytes: int) -> None:
-    """Enforce maximum upload payload constraint per file."""
-    if max_bytes > 0 and len(content) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=(
-                f"File '{filename}' exceeds maximum allowed upload size of "
-                f"{settings.max_upload_size_mb} MB."
-            ),
-        )
-
-
-async def _read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:
-    """Read uploaded files into memory and validate non-empty list and per-file size limits."""
-    if not files:
-        raise HTTPException(status_code=400, detail="At least one document file must be uploaded.")
-
-    max_bytes = settings.max_upload_size_mb * 1024 * 1024
-    files_data: list[tuple[str, bytes]] = []
-    for upload in files:
-        content = await upload.read()
-        filename = upload.filename or "uploaded_document"
-        _validate_file_size(filename, content, max_bytes)
-        files_data.append((filename, content))
-    return files_data
+# Backward-compatibility aliases
+_parse_extraction_schema = parse_extraction_schema
+_validate_file_size = validate_file_size
+_read_and_validate_uploads = read_and_validate_uploads
 
 
 @gpu_decorator(duration=60)
@@ -167,8 +130,8 @@ async def extract_from_documents(
     ),
 ) -> ExtractionResponse:
     """Extract structured data items from documents in a single privacy-preserving session."""
-    files_data = await _read_and_validate_uploads(files)
-    items = _parse_extraction_schema(items_schema)
+    files_data = await read_and_validate_uploads(files)
+    items = parse_extraction_schema(items_schema)
     items_dicts = [it.model_dump() for it in items]
 
     result_dict = await asyncio.to_thread(

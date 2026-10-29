@@ -20,7 +20,8 @@ class LLMClient:
     ) -> LLMExtractionResult:
         """Extract item directly via in-process local neural model."""
         local_engine = get_local_engine()
-        return local_engine.extract_item(
+        return await asyncio.to_thread(
+            local_engine.extract_item,
             query_key=query_key,
             query_description=query_description,
             context=context,

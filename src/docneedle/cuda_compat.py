@@ -28,6 +28,7 @@ except Exception:
             return args[0]
         return lambda f: f
 
+
 _cuda_preloaded = False
 
 

@@ -68,8 +68,7 @@ class Qwen3Reranker:
         self.model_path = str(model_path)
         self.n_gpu_layers = n_gpu_layers
         logger.info(
-            f"Loading Qwen3-Reranker from {self.model_path} "
-            f"(gpu_layers={self.n_gpu_layers})"
+            f"Loading Qwen3-Reranker from {self.model_path} (gpu_layers={self.n_gpu_layers})"
         )
         self.llm = llama_cpp.Llama(
             model_path=self.model_path,

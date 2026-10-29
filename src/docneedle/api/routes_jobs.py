@@ -8,9 +8,9 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 
-from docneedle.api.routes_extract import (
-    _parse_extraction_schema,
-    _read_and_validate_uploads,
+from docneedle.api.validation import (
+    parse_extraction_schema,
+    read_and_validate_uploads,
 )
 from docneedle.jobs.manager import job_manager
 from docneedle.jobs.models import JobCreateResponse, JobStatus, JobStatusResponse
@@ -43,8 +43,8 @@ async def create_extraction_job(
 
     Returns 202 Accepted immediately with job tracking URLs.
     """
-    files_data = await _read_and_validate_uploads(files)
-    items = _parse_extraction_schema(items_schema)
+    files_data = await read_and_validate_uploads(files)
+    items = parse_extraction_schema(items_schema)
     job_id = job_manager.create_job(total_items=len(items))
     job_info = job_manager.get_job(job_id)
 

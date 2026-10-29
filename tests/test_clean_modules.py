@@ -869,3 +869,64 @@ class TestRefactoredParserAndEmbedderHelpers:
         vec = _normalize_vector(raw)
         assert vec.shape == (2,)
         assert np.allclose(vec, np.array([0.6, 0.8], dtype=np.float32))
+
+
+class TestApiValidationHelpers:
+    """Test extracted API schema and upload validation functions."""
+
+    def test_parse_extraction_schema_valid_list(self) -> None:
+        import json
+
+        from docneedle.api.validation import parse_extraction_schema
+
+        schema_json = json.dumps(
+            [{"key": "test_key", "description": "test query", "type": "string"}]
+        )
+        items = parse_extraction_schema(schema_json)
+        assert len(items) == 1
+        assert items[0].key == "test_key"
+        assert items[0].type == "string"
+
+    def test_parse_extraction_schema_single_dict(self) -> None:
+        import json
+
+        from docneedle.api.validation import parse_extraction_schema
+
+        schema_json = json.dumps(
+            {"key": "single_key", "description": "single desc", "type": "money"}
+        )
+        items = parse_extraction_schema(schema_json)
+        assert len(items) == 1
+        assert items[0].key == "single_key"
+        assert items[0].description == "single desc"
+        assert items[0].type == "money"
+
+    def test_parse_extraction_schema_invalid_json(self) -> None:
+        import pytest
+        from fastapi import HTTPException
+
+        from docneedle.api.validation import parse_extraction_schema
+
+        with pytest.raises(HTTPException) as exc_info:
+            parse_extraction_schema("not-a-json")
+        assert exc_info.value.status_code == 400
+
+    def test_parse_extraction_schema_empty(self) -> None:
+        import pytest
+        from fastapi import HTTPException
+
+        from docneedle.api.validation import parse_extraction_schema
+
+        with pytest.raises(HTTPException) as exc_info:
+            parse_extraction_schema("[]")
+        assert exc_info.value.status_code == 400
+
+    def test_validate_file_size_exceeded(self) -> None:
+        import pytest
+        from fastapi import HTTPException
+
+        from docneedle.api.validation import validate_file_size
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_file_size("large.pdf", b"x" * 100, max_bytes=50)
+        assert exc_info.value.status_code == 413
