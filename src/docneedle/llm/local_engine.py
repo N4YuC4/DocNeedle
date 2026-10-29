@@ -795,6 +795,7 @@ class LocalLLMEngine:
                     temperature=settings.llm_temperature,
                     top_p=settings.llm_top_p,
                     max_tokens=avail_tokens,
+                    stop=settings.llm_stop_tokens,
                 )
 
             raw_content = res["choices"][0]["message"]["content"] or ""

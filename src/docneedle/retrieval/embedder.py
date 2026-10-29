@@ -257,9 +257,7 @@ def get_embedder() -> BaseEmbedder:
                 f"EmbeddingGemma-2 vision projector (mmproj) not found at: {mmproj_path}"
             )
 
-        from docneedle.retrieval.worker import IsolatedEmbeddingClient
-
-        _embedder_instance = IsolatedEmbeddingClient(
+        _embedder_instance = EmbeddingGemma2Embedder(
             model_path=model_path,
             mmproj_path=mmproj_path,
             dimension=settings.embedding_dimension,

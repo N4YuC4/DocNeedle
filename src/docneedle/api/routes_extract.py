@@ -115,13 +115,25 @@ def _sync_extract_session(
         store.add_chunks(all_chunks)
         logger.info(f"[INGESTION COMPLETE] Total Chunks indexed in RAM: {len(store.chunks)}")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            response = pool.submit(
-                asyncio.run,
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                response = pool.submit(
+                    asyncio.run,
+                    extraction_service.extract_items(
+                        items=items, store=store, enable_reranker=enable_reranker
+                    ),
+                ).result()
+        else:
+            response = asyncio.run(
                 extraction_service.extract_items(
                     items=items, store=store, enable_reranker=enable_reranker
-                ),
-            ).result()
+                )
+            )
 
         total_time_ms = round((time.perf_counter() - request_start) * 1000.0, 2)
         response.processing_time_ms = total_time_ms

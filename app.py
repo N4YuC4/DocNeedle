@@ -823,9 +823,27 @@ def perform_extraction_ui(
     import time
 
     start_time = time.perf_counter()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        results_html, resp_dict, chunks_to_use, status_html = pool.submit(
-            asyncio.run,
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            results_html, resp_dict, chunks_to_use, status_html = pool.submit(
+                asyncio.run,
+                _async_perform_extraction_ui(
+                    files,
+                    session_chunks,
+                    active_tab,
+                    raw_json,
+                    vis,
+                    *field_args,
+                    start_time=start_time,
+                ),
+            ).result()
+    else:
+        results_html, resp_dict, chunks_to_use, status_html = asyncio.run(
             _async_perform_extraction_ui(
                 files,
                 session_chunks,
@@ -834,8 +852,8 @@ def perform_extraction_ui(
                 vis,
                 *field_args,
                 start_time=start_time,
-            ),
-        ).result()
+            )
+        )
 
     total_time_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
     if isinstance(resp_dict, dict) and "results" in resp_dict:
