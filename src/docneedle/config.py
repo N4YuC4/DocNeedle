@@ -192,9 +192,7 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 10
     rrf_constant: int = 60
     reranker_enabled: bool = Field(
-        default_factory=lambda: (
-            os.environ.get("RERANKER_ENABLED", "").lower() in ("1", "true")
-        )
+        default_factory=lambda: os.environ.get("RERANKER_ENABLED", "").lower() in ("1", "true")
     )
     reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
     reranker_candidate_k: int = 4
@@ -218,21 +216,11 @@ class Settings(BaseSettings):
     llm_enable_thinking: bool = False
     llm_log_extraction_payloads: bool = False
     llm_domain_rules: str = (
-        "4. Domain specifics:\n"
-        "   - In rental contracts, 'Kira Bedeli' represents the agreed rent / monthly rent "
-        "('aylık kira bedeli'). Extract this stated amount directly (e.g., '25.000 TL').\n"
-        "   - For first name ('ad' / 'isim'), extract ONLY the given first name "
-        "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', first name is 'TOLGA').\n"
-        "   - For surname ('soyad' / 'soyisim'), extract ONLY the family surname "
-        "(e.g., in 'AD, SOYAD : TOLGA, ARSLAN' or 'TOLGA ARSLAN', surname is 'ARSLAN').\n"
-        "   - For passport number ('pasaport no' / 'passport no'), extract the standard "
-        "9-character passport number (e.g., 'U30154391'), not the bottom MRZ optical code.\n"
-        "   - When Expected Data Type is 'boolean', reply strictly 'Yes' if the requested entity "
-        "or item is present, or 'No' / 'Not found' if it is not. NEVER output numbers or IDs.\n"
-        "   - For address or location ('adres' / 'konum'), extract strictly the physical address "
-        "or city without document dates, timestamps, or header metadata.\n"
-        "   - NEVER concatenate adjacent column values, parent names ('baba adı', 'ana adı'), "
-        "gender, dates, or locations into the person's name.\n"
+        "# DOMAIN SPECIFICS\n"
+        "- In lease and rental contracts, 'Kira Bedeli' denotes the agreed periodic or "
+        "monthly rent amount; extract this stated amount directly.\n"
+        "- For address or location queries, extract the physical street/city address, omitting "
+        "document timestamps and agency headers.\n"
     )
     llm_stop_tokens: list[str] = Field(
         default_factory=lambda: [
