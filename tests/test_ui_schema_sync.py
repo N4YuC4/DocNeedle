@@ -6,10 +6,15 @@ from pathlib import Path
 import pytest
 
 from app import (
+    FIELD_TYPE_KEYS,
     MAX_FIELDS,
+    SCHEMA_PRESETS,
     apply_items_to_form_updates,
+    apply_preset_to_form_updates,
     collect_form_items,
+    make_status_html,
     parse_raw_json_schema,
+    render_results_html,
     resolve_field_type,
     serialize_form_to_json,
     unpack_field_args,
@@ -246,3 +251,110 @@ def test_resolve_field_type_and_collect_form_items():
     q_vals, k_vals, t_vals = unpack_field_args(field_args, num_fields=2)
     items = collect_form_items(q_vals, k_vals, t_vals, [True, False])
     assert items == [{"key": "key_1", "description": "Question 1", "type": "money"}]
+
+
+def test_schema_presets_structure():
+    expected_presets = {"invoice", "receipt", "id_card", "contract"}
+    assert set(SCHEMA_PRESETS.keys()) == expected_presets
+
+    for name, fields in SCHEMA_PRESETS.items():
+        assert len(fields) >= 3, f"Preset {name} has fewer than 3 fields"
+        assert len(fields) <= MAX_FIELDS
+        for item in fields:
+            assert "key" in item and item["key"]
+            assert "description" in item and item["description"]
+            assert item["type"] in FIELD_TYPE_KEYS
+
+
+def test_apply_preset_to_form_updates():
+    new_vis, grp_ups, q_ups, k_ups, t_ups, json_str = apply_preset_to_form_updates("invoice")
+    assert len(new_vis) == MAX_FIELDS
+    assert sum(1 for v in new_vis if v) == len(SCHEMA_PRESETS["invoice"])
+    parsed = json.loads(json_str)
+    assert len(parsed) == len(SCHEMA_PRESETS["invoice"])
+    assert parsed[0]["key"] == "invoice_id"
+
+
+def test_render_results_html_states():
+    # 1. Empty state
+    empty_html = render_results_html(None)
+    assert "Ready for Document Extraction" in empty_html
+    assert "Zero disk persistence" in empty_html
+    assert "PDF" in empty_html
+
+    # 2. Error state
+    error_html = render_results_html({"error": "Sample file size error"})
+    assert 'role="alert"' in error_html
+    assert "Extraction Notice" in error_html
+    assert "Troubleshooting Tips" in error_html
+    assert "Sample file size error" in error_html
+
+    # 3. Successful extraction with found and not found items
+    sample_resp = {
+        "total_items": 2,
+        "found_items": 1,
+        "processing_time_ms": 1250.0,
+        "results": [
+            {
+                "key": "inv_num",
+                "found": True,
+                "value": "INV-2026-001",
+                "confidence": 0.95,
+                "evidence": {
+                    "document": "sample.pdf",
+                    "page": 1,
+                    "snippet": "Invoice number INV-2026-001",
+                },
+                "thinking": "Located invoice identifier in top right header.",
+            },
+            {
+                "key": "tax_id",
+                "found": False,
+                "value": None,
+                "confidence": 0.0,
+            },
+        ],
+    }
+    results_html = render_results_html(sample_resp)
+    assert "Partially Found" in results_html
+    assert "INV-2026-001" in results_html
+    assert "High" in results_html
+    assert "%95" in results_html
+    assert "sample.pdf" in results_html
+    assert "Page 1" in results_html
+    assert "dn-copy-btn" in results_html
+    assert "Not Found" in results_html
+
+
+def test_make_status_html_accessibility_and_error():
+    normal_status = make_status_html("Ready to process")
+    assert 'role="status"' in normal_status
+    assert 'aria-live="polite"' in normal_status
+
+    error_status = make_status_html("Upload failed", is_error=True)
+    assert 'role="status"' in error_status
+    assert "⚠️" in error_status
+
+
+def test_perform_extraction_ui_with_progress_mock():
+    from unittest.mock import patch
+
+    import gradio as gr
+
+    from app import perform_extraction_ui
+
+    async def mock_async_extract(*args, **kwargs):
+        return (
+            "<div>Mock HTML</div>",
+            {"total_items": 1, "found_items": 1, "processing_time_ms": 1.0, "results": []},
+            [],
+            "Status",
+        )
+
+    with patch("app._async_perform_extraction_ui", side_effect=mock_async_extract):
+        prog = gr.Progress(track_tqdm=False)
+        html_out, resp_dict, _, status = perform_extraction_ui(
+            None, [], "form", "", [True], prog, "test_q", *([""] * 29)
+        )
+        assert resp_dict["found_items"] == 1
+        assert "Processing Time" in html_out

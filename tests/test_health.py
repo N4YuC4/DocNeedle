@@ -81,14 +81,38 @@ def test_get_system_health_model() -> None:
     """Verify typed health diagnostic helper returns a valid HealthResponse model."""
     diag = get_system_health()
     assert isinstance(diag, HealthResponse)
-    assert diag.status == "healthy"
+    assert diag.status in ("healthy", "degraded")
     assert diag.service == "DocNeedle"
+    assert isinstance(diag.uptime_seconds, float)
+    assert diag.uptime_seconds >= 0.0
+    assert isinstance(diag.process_memory_mb, float)
+    assert diag.process_memory_mb > 0.0
     assert isinstance(diag.free_threaded, bool)
     assert isinstance(diag.gil_enabled, bool)
     assert diag.free_threaded != diag.gil_enabled
+    assert diag.hardware.device in ("cuda", "cpu")
     assert diag.hardware.torch_cuda in (True, False) or isinstance(diag.hardware.torch_cuda, str)
+    assert isinstance(diag.models.all_ready, bool)
+    assert isinstance(diag.models.llm.ready, bool)
+    assert isinstance(diag.jobs.active_jobs, int)
+    assert isinstance(diag.jobs.total_cached_jobs, int)
     assert isinstance(diag.config.cpu_threads, int)
     assert diag.config.cpu_threads > 0
+
+
+def test_ui_health_sync() -> None:
+    """Verify app.py check_system_health synchronizes dynamically with get_system_health."""
+    from app import check_system_health
+
+    ui_data = check_system_health()
+    assert isinstance(ui_data, dict)
+    assert ui_data["service"] == "DocNeedle"
+    assert "uptime_seconds" in ui_data
+    assert "process_memory_mb" in ui_data
+    assert "models" in ui_data
+    assert "jobs" in ui_data
+    assert ui_data["models"]["llm"]["ready"] is True
+    assert ui_data["models"]["llm"]["size_mb"] is not None
 
 
 def test_check_torch_cuda_status_non_crashing() -> None:

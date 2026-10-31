@@ -273,6 +273,22 @@ class JobManager:
                 logger.info(f"[JOB CLEANUP] Evicting expired job from RAM: {jid}")
                 del self._jobs[jid]
 
+    def get_stats(self) -> dict[str, int]:
+        """Return counts of actively running and total cached in-memory jobs."""
+        with self._lock:
+            active = sum(
+                1
+                for rec in self._jobs.values()
+                if rec.status
+                in (
+                    JobStatus.PENDING,
+                    JobStatus.PARSING,
+                    JobStatus.INDEXING,
+                    JobStatus.EXTRACTING,
+                )
+            )
+            return {"active_jobs": active, "total_cached_jobs": len(self._jobs)}
+
     async def run_extraction_worker(
         self,
         job_id: str,
