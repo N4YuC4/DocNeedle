@@ -83,7 +83,7 @@ enable_thinking = false
 log_extraction_payloads = false
 stop_tokens = ["</s>", "<turn|>", "<end_of_turn>", "<|turn>", "<|im_end|>", "<|eot_id|>"]
 # Prompt lookup speculative decoding for fast in-process token generation
-speculative_enabled = true
+speculative_enabled = false
 speculative_cpu_enabled = false
 speculative_max_vocab_size = 65536
 speculative_num_pred_tokens = 5
