@@ -1,5 +1,8 @@
 """Unit tests for newly refactored modular helper functions across DocNeedle."""
 
+from pathlib import Path
+from typing import Any
+
 import pytest
 
 from docneedle.extraction.service import _build_retrieval_query, _find_best_supporting_match
@@ -623,7 +626,6 @@ class TestCodeReviewRegressionFixes:
 
     def test_gradio_ui_html_escaping_and_type_mapping(self) -> None:
         import sys
-        from pathlib import Path
 
         from docneedle.main import app as fastapi_app
 
@@ -930,3 +932,162 @@ class TestApiValidationHelpers:
         with pytest.raises(HTTPException) as exc_info:
             validate_file_size("large.pdf", b"x" * 100, max_bytes=50)
         assert exc_info.value.status_code == 413
+
+    def test_parse_extraction_schema_exceeds_max_items(self) -> None:
+        import json
+
+        import pytest
+        from fastapi import HTTPException
+
+        from docneedle.api.validation import parse_extraction_schema
+        from docneedle.config import settings
+
+        items = [
+            {"key": f"k{i}", "description": f"desc {i}"}
+            for i in range(settings.max_schema_items + 1)
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            parse_extraction_schema(json.dumps(items))
+        assert exc_info.value.status_code == 400
+        assert "exceeding maximum allowed limit" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_read_and_validate_uploads_exceeds_max_files(self) -> None:
+        import io
+
+        import pytest
+        from fastapi import HTTPException, UploadFile
+
+        from docneedle.api.validation import read_and_validate_uploads
+        from docneedle.config import settings
+
+        excess_files = [
+            UploadFile(filename=f"doc_{i}.txt", file=io.BytesIO(b"sample text"))
+            for i in range(settings.max_upload_files + 1)
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            await read_and_validate_uploads(excess_files)
+        assert exc_info.value.status_code == 400
+        assert "exceeding maximum allowed limit" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_read_and_validate_uploads_exceeds_total_size(self) -> None:
+        import io
+
+        import pytest
+        from fastapi import HTTPException, UploadFile
+
+        from docneedle.api.validation import BYTES_PER_MEGABYTE, read_and_validate_uploads
+
+        # Three 35MB files (each under 50MB per-file limit, but 105MB > 100MB total limit)
+        part_size = 35 * BYTES_PER_MEGABYTE
+        files = [
+            UploadFile(filename="part1.bin", file=io.BytesIO(b"x" * part_size)),
+            UploadFile(filename="part2.bin", file=io.BytesIO(b"y" * part_size)),
+            UploadFile(filename="part3.bin", file=io.BytesIO(b"z" * part_size)),
+        ]
+        with pytest.raises(HTTPException) as exc_info:
+            await read_and_validate_uploads(files)
+        assert exc_info.value.status_code == 413
+        assert "Total upload payload size exceeds maximum allowed limit" in exc_info.value.detail
+
+
+class TestRerankerStrictNoFallbackAndErrors:
+    """Test Qwen3Reranker error classification and strict fail-fast policy."""
+
+    def test_reranker_network_error_classification(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
+    ) -> None:
+        import urllib.error
+
+        import pytest
+
+        from docneedle.config import settings
+        from docneedle.retrieval.reranker import Qwen3Reranker
+
+        monkeypatch.setattr(settings, "model_storage_dir", str(tmp_path))
+
+        def mock_download_fail(models_dir: str) -> None:
+            raise urllib.error.URLError("Network connection timed out")
+
+        monkeypatch.setattr("scripts.download_models.download_reranker_model", mock_download_fail)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            Qwen3Reranker._resolve_model_path()
+        assert "network connectivity error" in str(exc_info.value)
+        assert "URLError" in str(exc_info.value)
+
+    def test_reranker_io_error_classification(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Any,
+    ) -> None:
+        import pytest
+
+        from docneedle.config import settings
+        from docneedle.retrieval.reranker import Qwen3Reranker
+
+        monkeypatch.setattr(settings, "model_storage_dir", str(tmp_path))
+
+        def mock_download_fail(models_dir: str) -> None:
+            raise PermissionError("Permission denied: /models/reranker")
+
+        monkeypatch.setattr("scripts.download_models.download_reranker_model", mock_download_fail)
+
+        with pytest.raises(RuntimeError) as exc_info:
+            Qwen3Reranker._resolve_model_path()
+        assert "filesystem/IO error" in str(exc_info.value)
+        assert "PermissionError" in str(exc_info.value)
+
+    def test_reranker_unusable_model_fails_loudly(
+        self,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pytest
+
+        from docneedle.config import settings
+        from docneedle.retrieval.reranker import Qwen3Reranker
+
+        # Create a corrupted/invalid model file
+        fake_model_dir = tmp_path / "reranker"
+        fake_model_dir.mkdir(parents=True)
+        fake_model = fake_model_dir / "Qwen3-Reranker-0.6B.Q4_K_M.gguf"
+        fake_model.write_bytes(b"corrupted gguf data")
+
+        monkeypatch.setattr(settings, "model_storage_dir", str(tmp_path))
+
+        # Initializing Qwen3Reranker with corrupted file should raise informative RuntimeError
+        with pytest.raises(RuntimeError) as exc_info:
+            Qwen3Reranker(model_path=fake_model)
+        assert "failed to initialize or execute in llama.cpp" in str(exc_info.value)
+
+    def test_get_reranker_strict_no_fallback_raises_on_force(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import pytest
+
+        import docneedle.retrieval.reranker as reranker_mod
+        from docneedle.retrieval.reranker import get_reranker
+
+        monkeypatch.setattr(reranker_mod, "_reranker_instance", None)
+
+        def mock_init_fail() -> None:
+            raise RuntimeError("CUDA out of memory for reranker")
+
+        monkeypatch.setattr(reranker_mod, "Qwen3Reranker", mock_init_fail)
+
+        # Calling get_reranker(force=True) must fail fast and propagate the exception
+        with pytest.raises(RuntimeError) as exc_info:
+            get_reranker(force=True)
+        assert "CUDA out of memory for reranker" in str(exc_info.value)
+
+        monkeypatch.setattr(reranker_mod, "Qwen3Reranker", mock_init_fail)
+
+        # Calling get_reranker(force=True) must fail fast and propagate the exception
+        with pytest.raises(RuntimeError) as exc_info:
+            get_reranker(force=True)
+        assert "CUDA out of memory for reranker" in str(exc_info.value)

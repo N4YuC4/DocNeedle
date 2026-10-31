@@ -1,7 +1,9 @@
 """Cross-encoder reranking engine powered by Qwen3-Reranker-0.6B GGUF via llama.cpp."""
 
 import logging
+import socket
 import threading
+import urllib.error
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,31 @@ from docneedle.config import settings
 from docneedle.retrieval.models import SearchResult
 
 logger = logging.getLogger(__name__)
+
+
+def _is_network_error(exc: Exception) -> bool:
+    """Determine if an exception encountered during download was caused by network connectivity."""
+    network_types = (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        TimeoutError,
+        ConnectionError,
+        socket.gaierror,
+        socket.timeout,
+    )
+    if isinstance(exc, network_types):
+        return True
+    exc_type_name = type(exc).__name__.lower()
+    exc_msg = str(exc).lower()
+    if any(
+        k in exc_type_name for k in ("network", "http", "connection", "timeout", "url", "socket")
+    ):
+        return True
+    return any(
+        k in exc_msg
+        for k in ("connection", "timed out", "unreachable", "name resolution", "dns", "ssl")
+    )
+
 
 RERANKER_PREFIX = (
     "<|im_start|>system\n"
@@ -70,21 +97,27 @@ class Qwen3Reranker:
         logger.info(
             f"Loading Qwen3-Reranker from {self.model_path} (gpu_layers={self.n_gpu_layers})"
         )
-        self.llm = llama_cpp.Llama(
-            model_path=self.model_path,
-            n_gpu_layers=self.n_gpu_layers,
-            n_ctx=settings.reranker_n_ctx,
-            n_threads=settings.cpu_threads,
-            n_threads_batch=settings.cpu_threads_batch,
-            n_batch=settings.model_n_batch,
-            logits_all=False,
-            type_k=settings.model_kv_cache_type_k,
-            type_v=settings.model_kv_cache_type_v,
-            flash_attn=settings.model_flash_attn,
-            use_mmap=True,
-            use_mlock=False,
-            verbose=False,
-        )
+        try:
+            self.llm = llama_cpp.Llama(
+                model_path=self.model_path,
+                n_gpu_layers=self.n_gpu_layers,
+                n_ctx=settings.reranker_n_ctx,
+                n_threads=settings.cpu_threads,
+                n_threads_batch=settings.cpu_threads_batch,
+                n_batch=settings.model_n_batch,
+                logits_all=False,
+                type_k=settings.model_kv_cache_type_k,
+                type_v=settings.model_kv_cache_type_v,
+                flash_attn=settings.model_flash_attn,
+                use_mmap=True,
+                use_mlock=False,
+                verbose=False,
+            )
+        except Exception as e:
+            raise RuntimeError(
+                f"Qwen3-Reranker model file exists at '{self.model_path}' but failed to initialize "
+                f"or execute in llama.cpp ({type(e).__name__}): {e}"
+            ) from e
         # Release the unused per-token vocabulary logits buffer in llama-cpp-python:
         # score() reads logits directly from self.llm._ctx.get_logits() and never uses self.scores.
         self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
@@ -98,7 +131,37 @@ class Qwen3Reranker:
         model_path = base_dir / "reranker" / "Qwen3-Reranker-0.6B.Q4_K_M.gguf"
         if model_path.exists():
             return model_path
-        raise FileNotFoundError(f"No Qwen3-Reranker GGUF model found at: {model_path}")
+
+        logger.info(
+            "Qwen3-Reranker model not found at %s. Attempting automatic bootstrap download...",
+            model_path,
+        )
+        try:
+            from scripts.download_models import download_reranker_model
+
+            download_reranker_model(str(base_dir))
+        except Exception as exc:
+            if _is_network_error(exc):
+                raise RuntimeError(
+                    f"Failed to download Qwen3-Reranker model due to a network connectivity error "
+                    f"({type(exc).__name__}): {exc}"
+                ) from exc
+            elif isinstance(exc, (IOError, OSError, PermissionError)):
+                raise RuntimeError(
+                    f"Failed to download Qwen3-Reranker model due to a filesystem/IO error "
+                    f"({type(exc).__name__}): {exc}"
+                ) from exc
+            else:
+                raise RuntimeError(
+                    f"Failed to download Qwen3-Reranker model due to an unexpected error "
+                    f"({type(exc).__name__}): {exc}"
+                ) from exc
+
+        if model_path.exists():
+            return model_path
+        raise FileNotFoundError(
+            f"No Qwen3-Reranker model at '{model_path}' after automatic download attempt."
+        )
 
     def score(
         self,
@@ -202,8 +265,9 @@ _reranker_lock = threading.Lock()
 
 
 def get_reranker(force: bool = False) -> Qwen3Reranker | None:
-    """Factory returning Qwen3Reranker singleton if enabled/forced and model exists,
-    otherwise None.
+    """Factory returning Qwen3Reranker singleton if enabled/forced and model exists.
+
+    Fails fast with an explicit exception if forced or enabled but model cannot be loaded.
     """
     global _reranker_instance
     if not force and not settings.reranker_enabled and _reranker_instance is None:
@@ -214,6 +278,8 @@ def get_reranker(force: bool = False) -> Qwen3Reranker | None:
                 try:
                     _reranker_instance = Qwen3Reranker()
                 except Exception as e:
-                    logger.warning(f"Could not load Qwen3-Reranker: {e}")
+                    logger.error("Failed to initialize Qwen3-Reranker: %s", e)
+                    if force or settings.reranker_enabled:
+                        raise
                     return None
     return _reranker_instance

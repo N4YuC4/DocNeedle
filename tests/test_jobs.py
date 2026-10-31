@@ -85,6 +85,102 @@ async def test_job_manager_ttl_cleanup() -> None:
 
 
 @pytest.mark.asyncio
+async def test_job_manager_concurrent_job_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify that exceeding max_concurrent_jobs raises 429 Too Many Requests."""
+    from fastapi import HTTPException
+
+    from docneedle.config import settings
+
+    monkeypatch.setattr(settings, "max_concurrent_jobs", 3)
+    mgr = JobManager()
+
+    job1 = mgr.create_job(total_items=1)
+    job2 = mgr.create_job(total_items=1)
+    job3 = mgr.create_job(total_items=1)
+    assert job1 and job2 and job3
+
+    with pytest.raises(HTTPException) as exc_info:
+        mgr.create_job(total_items=1)
+    assert exc_info.value.status_code == 429
+    assert "Server busy" in exc_info.value.detail
+    assert "concurrent jobs currently running" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_job_manager_free_threaded_concurrency_stress() -> None:
+    """Stress-test JobManager under Python 3.14t Free-Threaded (no-GIL) concurrency.
+
+    Concurrently subscribes, receives events, unsubscribes, updates progress,
+    and appends extracted items across multiple concurrent tasks without race conditions.
+    """
+    from docneedle.extraction.schemas import ExtractionResponse
+
+    mgr = JobManager()
+    job_id = mgr.create_job(total_items=20)
+
+    errors: list[Exception] = []
+
+    async def consumer(consumer_id: int) -> None:
+        try:
+            q = await mgr.subscribe(job_id)
+            if not q:
+                return
+            while True:
+                msg = await q.get()
+                event_type = msg.get("event")
+                if event_type in ("completed", "error"):
+                    break
+            mgr.unsubscribe(job_id, q)
+        except Exception as exc:
+            errors.append(exc)
+
+    async def producer() -> None:
+        try:
+            for i in range(1, 21):
+                await mgr.update_progress(
+                    job_id=job_id,
+                    step=f"Processing field {i}",
+                    completed_items=i,
+                    total_items=20,
+                )
+                await mgr.append_result(
+                    job_id=job_id,
+                    result=ExtractionItemResult(
+                        key=f"field_{i}",
+                        found=True,
+                        value=f"value_{i}",
+                        confidence=0.99,
+                    ),
+                )
+                await asyncio.sleep(0.002)
+
+            await mgr.complete_job(
+                job_id=job_id,
+                response=ExtractionResponse(
+                    status="completed",
+                    processing_time_ms=50.0,
+                    total_items=20,
+                    found_items=20,
+                    results=[],
+                ),
+            )
+        except Exception as exc:
+            errors.append(exc)
+
+    # Launch 5 concurrent consumers and 1 producer simultaneously
+    consumer_tasks = [asyncio.create_task(consumer(i)) for i in range(5)]
+    producer_task = asyncio.create_task(producer())
+
+    await asyncio.gather(producer_task, *consumer_tasks)
+
+    assert len(errors) == 0, f"Encountered concurrent errors: {errors}"
+    final_job = mgr.get_job(job_id)
+    assert final_job is not None
+    assert final_job.status == JobStatus.COMPLETED
+    assert len(final_job.results) == 20
+
+
+@pytest.mark.asyncio
 async def test_jobs_api_e2e_polling_and_sse() -> None:
     """Test full /v1/jobs workflow: submit -> 202 -> SSE stream / poll -> complete."""
     transport = ASGITransport(app=app)

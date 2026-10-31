@@ -96,3 +96,10 @@ confidence_found_score = 0.95
 confidence_not_found_score = 0.0
 job_retention_minutes = 15
 model_storage_dir = "models"
+
+[security]
+max_schema_items = 50
+max_upload_files = 20
+max_total_upload_size_mb = 100
+max_concurrent_jobs = 10
+

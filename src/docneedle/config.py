@@ -65,6 +65,36 @@ def _resolve_model_dir() -> str:
 
 def _detect_effective_cores() -> int:
     """Detect available CPU cores respecting cgroups and container quotas (e.g. HF Spaces)."""
+    # 1. Check Hugging Face Spaces environment flag (Spaces containers are capped at 2 vCPUs)
+    if bool(os.environ.get("SPACES_ZERO_GPU")) or os.environ.get("SYSTEM") == "spaces":
+        return 2
+
+    # 2. Linux cgroups CFS bandwidth quota detection (Docker, K8s, containerized runtimes)
+    try:
+        # cgroup v2: /sys/fs/cgroup/cpu.max contains "$MAX $PERIOD" (e.g. "200000 100000")
+        cg2 = Path("/sys/fs/cgroup/cpu.max")
+        if cg2.exists():
+            parts = cg2.read_text().strip().split()
+            if len(parts) >= 2 and parts[0] != "max":
+                q, p = float(parts[0]), float(parts[1])
+                if p > 0 and q > 0:
+                    return max(1, int(round(q / p)))
+    except Exception:
+        pass
+
+    try:
+        # cgroup v1: cpu.cfs_quota_us and cpu.cfs_period_us
+        cg1_q = Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+        cg1_p = Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+        if cg1_q.exists() and cg1_p.exists():
+            q = float(cg1_q.read_text().strip())
+            p = float(cg1_p.read_text().strip())
+            if p > 0 and q > 0:
+                return max(1, int(round(q / p)))
+    except Exception:
+        pass
+
+    # 3. Process CPU count and sched_getaffinity fallbacks for bare-metal systems
     if hasattr(os, "process_cpu_count"):
         proc_cores = os.process_cpu_count()
         if proc_cores:
@@ -95,6 +125,9 @@ def _default_cpu_threads() -> int:
 
 def _default_cpu_threads_batch() -> int:
     cores = _detect_effective_cores()
+    # Cap batch threads to avoid scheduling freezes under cgroup CPU limits
+    if cores > 8:
+        return min(8, cores)
     return max(1, cores)
 
 
@@ -259,6 +292,12 @@ class Settings(BaseSettings):
     model_kv_cache_type_k: int = 8  # 8 = GGML_TYPE_Q8_0 (8-bit quantized KV cache)
     model_kv_cache_type_v: int = 8  # 8 = GGML_TYPE_Q8_0 (8-bit quantized KV cache)
     model_flash_attn: bool = True  # Required for quantized V cache in llama.cpp
+
+    # 9. Security & Resource Constraints (Configurable via [security] or flat keys in config.toml)
+    max_schema_items: int = 50
+    max_upload_files: int = 20
+    max_total_upload_size_mb: int = 100
+    max_concurrent_jobs: int = 10
 
     @property
     def effective_gpu_layers(self) -> int:

@@ -728,6 +728,82 @@ async def _async_perform_extraction_ui(
             make_status_html("Please define at least one field to extract.", is_success=False),
         )
 
+    if len(queries) > settings.max_schema_items:
+        err = {
+            "error": (
+                f"Schema contains {len(queries)} items, exceeding maximum allowed limit of "
+                f"{settings.max_schema_items} items."
+            )
+        }
+        return (
+            render_results_html(err),
+            err,
+            list(session_chunks) if session_chunks else [],
+            make_status_html(
+                f"Limit Exceeded: Maximum {settings.max_schema_items} fields allowed per request.",
+                is_success=False,
+            ),
+        )
+
+    if len(file_list) > settings.max_upload_files:
+        err = {
+            "error": (
+                f"Batch contains {len(file_list)} files, exceeding maximum allowed limit of "
+                f"{settings.max_upload_files} files."
+            )
+        }
+        return (
+            render_results_html(err),
+            err,
+            list(session_chunks) if session_chunks else [],
+            make_status_html(
+                f"Limit Exceeded: Maximum {settings.max_upload_files} files allowed per request.",
+                is_success=False,
+            ),
+        )
+
+    max_file_bytes = settings.max_upload_size_mb * 1024 * 1024
+    max_total_bytes = settings.max_total_upload_size_mb * 1024 * 1024
+    total_bytes = 0
+    for f in file_list:
+        fpath = Path(f.name if hasattr(f, "name") else str(f))
+        if fpath.exists():
+            sz = fpath.stat().st_size
+            total_bytes += sz
+            if max_file_bytes > 0 and sz > max_file_bytes:
+                err = {
+                    "error": (
+                        f"File '{fpath.name}' exceeds maximum allowed upload size of "
+                        f"{settings.max_upload_size_mb} MB."
+                    )
+                }
+                return (
+                    render_results_html(err),
+                    err,
+                    list(session_chunks) if session_chunks else [],
+                    make_status_html(
+                        f"File size exceeded: {fpath.name} > {settings.max_upload_size_mb} MB",
+                        is_success=False,
+                    ),
+                )
+    if max_total_bytes > 0 and total_bytes > max_total_bytes:
+        err = {
+            "error": (
+                f"Total upload payload size ({total_bytes / (1024 * 1024):.1f} MB) exceeds "
+                f"maximum allowed limit of {settings.max_total_upload_size_mb} MB."
+            )
+        }
+        return (
+            render_results_html(err),
+            err,
+            list(session_chunks) if session_chunks else [],
+            make_status_html(
+                f"Total payload size exceeded: {total_bytes / (1024 * 1024):.1f} MB > "
+                f"{settings.max_total_upload_size_mb} MB",
+                is_success=False,
+            ),
+        )
+
     try:
         from docneedle.cuda_compat import preload_cuda_runtime_libs
 
@@ -808,7 +884,57 @@ async def _async_perform_extraction_ui(
                 pass
 
 
-@gpu_decorator(duration=60)
+def _estimate_extraction_duration(
+    files: Any = None,
+    session_chunks: list[Any] | None = None,
+    active_tab: str = "",
+    raw_json: str = "",
+    vis: list[bool] | None = None,
+    *field_args: Any,
+    **kwargs: Any,
+) -> int:
+    """Dynamically estimate ZeroGPU reservation duration based on schema field count."""
+    try:
+        num_items = 1
+        if active_tab == "raw" and raw_json and raw_json.strip():
+            try:
+                parsed = json.loads(raw_json)
+                if isinstance(parsed, list):
+                    num_items = max(1, len(parsed))
+            except Exception:
+                num_items = 1
+        elif field_args and vis:
+            try:
+                q_vals, k_vals, t_vals = unpack_field_args(field_args)
+                items = collect_form_items(q_vals, k_vals, t_vals, vis)
+                if items:
+                    num_items = max(1, len(items))
+                else:
+                    num_items = max(1, sum(1 for v in vis if v))
+            except Exception:
+                num_items = max(1, sum(1 for v in vis if v))
+        elif vis and isinstance(vis, list):
+            num_items = max(1, sum(1 for v in vis if v))
+
+        # Base duration covers initial multimodal prefill and model warmup (~67-75s)
+        # RAG retrieval context size is bounded (max 2 images, 5 text chunks),
+        # so LLM inference workload is independent of the number of uploaded files.
+        base_duration = 75
+        item_overhead = max(0, num_items - 1) * 3
+
+        estimated = base_duration + item_overhead
+        logger.info(
+            "--> [ZeroGPU Duration] Estimated reservation: %ds (items=%d)",
+            estimated,
+            num_items,
+        )
+        return min(95, max(60, estimated))
+    except Exception as e:
+        logger.debug("Fallback to default ZeroGPU duration due to estimation error: %s", e)
+        return 75
+
+
+@gpu_decorator(duration=_estimate_extraction_duration)
 def perform_extraction_ui(
     files: Any,
     session_chunks: list[Any] | None,

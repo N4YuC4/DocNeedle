@@ -27,7 +27,30 @@ _validate_file_size = validate_file_size
 _read_and_validate_uploads = read_and_validate_uploads
 
 
-@gpu_decorator(duration=60)
+def _estimate_api_extract_duration(
+    files_data: list[tuple[str, bytes]] | None = None,
+    items_dicts: list[dict[str, Any]] | None = None,
+    *args: Any,
+    **kwargs: Any,
+) -> int:
+    """Dynamically estimate ZeroGPU reservation duration for synchronous API extraction."""
+    try:
+        num_items = len(items_dicts) if items_dicts else 1
+        base_duration = 75
+        item_overhead = max(0, num_items - 1) * 3
+        estimated = base_duration + item_overhead
+        logger.info(
+            "--> [ZeroGPU API Duration] Estimated reservation: %ds (items=%d)",
+            estimated,
+            num_items,
+        )
+        return min(95, max(60, estimated))
+    except Exception as e:
+        logger.debug("Fallback to default ZeroGPU API duration: %s", e)
+        return 75
+
+
+@gpu_decorator(duration=_estimate_api_extract_duration)
 def _sync_extract_session(
     files_data: list[tuple[str, bytes]],
     items_dicts: list[dict[str, Any]],

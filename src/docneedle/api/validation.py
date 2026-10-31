@@ -26,6 +26,16 @@ def parse_extraction_schema(items_schema: str) -> list[ExtractionItemQuery]:
             status_code=400,
             detail="At least one extraction item must be provided in schema.",
         )
+
+    if len(items) > settings.max_schema_items:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Schema contains {len(items)} items, exceeding maximum allowed limit of "
+                f"{settings.max_schema_items} items per request."
+            ),
+        )
+
     return items
 
 
@@ -46,12 +56,32 @@ async def read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str, 
     if not files:
         raise HTTPException(status_code=400, detail="At least one document file must be uploaded.")
 
-    max_bytes = settings.max_upload_size_mb * BYTES_PER_MEGABYTE
+    if len(files) > settings.max_upload_files:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Batch contains {len(files)} files, exceeding maximum allowed limit of "
+                f"{settings.max_upload_files} files per request."
+            ),
+        )
+
+    max_file_bytes = settings.max_upload_size_mb * BYTES_PER_MEGABYTE
+    max_total_bytes = settings.max_total_upload_size_mb * BYTES_PER_MEGABYTE
+    total_bytes = 0
+
     files_data: list[tuple[str, bytes]] = []
     for upload in files:
         content = await upload.read()
+        total_bytes += len(content)
+        if max_total_bytes > 0 and total_bytes > max_total_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(
+                    f"Total upload payload size exceeds maximum allowed limit of "
+                    f"{settings.max_total_upload_size_mb} MB."
+                ),
+            )
         filename = upload.filename or "uploaded_document"
-        validate_file_size(filename, content, max_bytes)
+        validate_file_size(filename, content, max_file_bytes)
         files_data.append((filename, content))
     return files_data
-

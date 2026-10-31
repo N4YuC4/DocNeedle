@@ -636,25 +636,58 @@ class LocalLLMEngine:
 
         supports_gpu = getattr(llama_cpp, "llama_supports_gpu_offload", lambda: False)()
         eff_layers = settings.effective_gpu_layers
+
+        cuda_device_name = "N/A"
+        cuda_available = False
+        try:
+            import torch
+
+            cuda_available = bool(torch.cuda.is_available())
+            if cuda_available:
+                cuda_device_name = (
+                    f"{torch.cuda.get_device_name(0)} (devices={torch.cuda.device_count()})"
+                )
+        except Exception:
+            pass
+
         logger.info(
-            "Loading local LLM (%s) from %s (n_gpu_layers=%d, gpu_supported=%s, cuda_env=%s)...",
-            self.model_path.name,
-            self.model_path,
+            "--> [HARDWARE DIAGNOSTIC] GPU Enabled: %s | eff_layers: %d | llama_supports_gpu: %s "
+            "| PyTorch CUDA: %s (%s) | cuda_env: %s | threads: %d (batch=%d)",
+            settings.gpu_enabled,
             eff_layers,
             supports_gpu,
+            cuda_available,
+            cuda_device_name,
             os.environ.get("CUDA_VISIBLE_DEVICES"),
+            settings.cpu_threads,
+            settings.cpu_threads_batch,
         )
+
+        if settings.gpu_enabled and not supports_gpu:
+            logger.warning(
+                "--> [CUDA WARNING] GPU offloading is requested (eff_layers=%d), but llama_cpp "
+                "is compiled without GPU offload support!",
+                eff_layers,
+            )
 
         self.mmproj_path = _resolve_llm_mmproj_path()
         chat_handler = None
+        is_verbose = settings.gpu_enabled or logger.isEnabledFor(logging.DEBUG)
+
         if self.mmproj_path is not None:
             try:
                 from llama_cpp.llama_chat_format import Gemma4ChatHandler
 
                 chat_handler = Gemma4ChatHandler(
-                    clip_model_path=str(self.mmproj_path), verbose=True
+                    clip_model_path=str(self.mmproj_path),
+                    verbose=is_verbose,
+                    use_gpu=(eff_layers != 0),
                 )
-                logger.info("Multimodal vision support enabled with %s", self.mmproj_path)
+                logger.info(
+                    "Multimodal vision support enabled with %s (use_gpu=%s)",
+                    self.mmproj_path,
+                    eff_layers != 0,
+                )
             except Exception as e:
                 logger.error("Could not initialize Gemma4ChatHandler: %s", e)
                 raise
@@ -678,7 +711,7 @@ class LocalLLMEngine:
             flash_attn=settings.model_flash_attn,
             use_mmap=True,
             use_mlock=False,
-            verbose=True,
+            verbose=is_verbose,
         )
         if not logits_all and hasattr(self.llm, "scores"):
             import numpy as np
