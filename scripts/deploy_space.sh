@@ -61,8 +61,6 @@ hf upload "$SPACE_ID" . . --repo-type space \
   --exclude ".python-version" \
   --exclude "**/.fuse_hidden*" \
   --exclude "README.md.hf_bak" \
-  --delete "src/docneedle/ingest/ocr_engine.py" \
-  --delete "src/docneedle/bin/*" \
   --commit-message "$COMMIT_MSG"
 
 restore_readme

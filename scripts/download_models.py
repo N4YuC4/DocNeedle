@@ -72,25 +72,6 @@ def download_file(
         return
 
     print(f"Downloading: {url} -> {dest_path}")
-    if repo_id and filename:
-        try:
-            from huggingface_hub import hf_hub_download
-
-            downloaded = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                local_dir=os.path.dirname(dest_path),
-            )
-            dest_abs = os.path.abspath(dest_path)
-            down_abs = os.path.abspath(downloaded)
-            if down_abs != dest_abs and os.path.exists(down_abs):
-                import shutil
-
-                shutil.copy2(down_abs, dest_abs)
-            print("\n  Download complete.")
-            return
-        except Exception as e:
-            print(f"hf_hub_download failed ({e}), falling back to standard download...")
 
     def report_progress(block_num: int, block_size: int, total_size: int) -> None:
         downloaded = block_num * block_size
