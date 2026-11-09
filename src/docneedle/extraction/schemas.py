@@ -1,5 +1,7 @@
 """Information extraction and verification schemas."""
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -12,7 +14,13 @@ class ExtractionItemQuery(BaseModel):
         default="string",
         description=(
             "Expected type: string, number, money, date, time, email, "
-            "phone, id, iban, percentage, person, organization, address, boolean, list"
+            "phone, id, iban, percentage, person, organization, address, boolean, list, array"
+        ),
+    )
+    items_schema: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "JSON schema defining the structure of array elements if type is list or array."
         ),
     )
 
@@ -30,7 +38,7 @@ class ExtractionItemResult(BaseModel):
 
     key: str
     found: bool
-    value: str | None = None
+    value: Any | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: ExtractionEvidence | None = None
     thinking: str | None = None

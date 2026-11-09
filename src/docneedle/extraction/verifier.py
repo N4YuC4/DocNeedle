@@ -94,6 +94,7 @@ class ConfidenceCalculator:
         folded_val: str,
         target_chunk_text: str,
         expected_type: str | None,
+        has_image: bool = False,
     ) -> float:
         """Evaluate how closely the extracted value aligns with the supporting evidence chunk."""
         norm_chunk = normalize_for_match(target_chunk_text)
@@ -103,8 +104,12 @@ class ConfidenceCalculator:
         if is_boolean_val and expected_type and expected_type.lower() == "boolean":
             return CONFIDENCE_BOOLEAN_SCORE
 
-        is_visual_chunk = "[görsel doküman" in norm_chunk or "[görsel belge sayfası" in norm_chunk
+        is_visual_chunk = (
+            has_image or "[görsel doküman" in norm_chunk or "[görsel belge sayfası" in norm_chunk
+        )
         if is_visual_chunk:
+            if norm_val in norm_chunk or (folded_val and folded_val in folded_chunk):
+                return CONFIDENCE_EXACT_MATCH_SCORE
             return CONFIDENCE_ALL_WORDS_SCORE
 
         if len(norm_val) <= 3:
@@ -140,14 +145,23 @@ class ConfidenceCalculator:
     @staticmethod
     def _apply_type_penalties(
         base_score: float,
-        val_str: str,
+        value: Any,
         expected_type: str | None,
     ) -> float:
         """Penalize score when the value violates expected semantic data type constraints."""
         if not expected_type:
             return base_score
 
-        constraint = TYPE_CONSTRAINTS.get(expected_type.lower())
+        t_low = expected_type.lower()
+        if t_low in ("list", "array"):
+            if not isinstance(value, (list, tuple)) and not (
+                isinstance(value, str) and value.strip()
+            ):
+                return base_score - PENALTY_HIGH
+            return base_score
+
+        val_str = str(value).strip()
+        constraint = TYPE_CONSTRAINTS.get(t_low)
         if constraint and not constraint.is_valid(val_str):
             return base_score - constraint.penalty
 
@@ -167,23 +181,59 @@ class ConfidenceCalculator:
         if not found or value is None:
             return settings.confidence_not_found_score
 
+        has_image = bool(kwargs.get("has_image", False))
+        if isinstance(value, (list, tuple)):
+            if len(value) == 0:
+                return settings.confidence_not_found_score
+            score = settings.confidence_found_score
+            if has_image:
+                score = CONFIDENCE_ALL_WORDS_SCORE
+            elif target_chunk_text:
+                norm_chunk = normalize_for_match(target_chunk_text)
+                matched_count = 0
+                sample_count = 0
+                for item in value[:8]:
+                    if isinstance(item, dict):
+                        for v in item.values():
+                            if isinstance(v, (str, int, float)):
+                                s = str(v).strip()
+                                if len(s) >= 3:
+                                    sample_count += 1
+                                    if normalize_for_match(s) in norm_chunk:
+                                        matched_count += 1
+                    elif isinstance(item, (str, int, float)):
+                        s = str(item).strip()
+                        if len(s) >= 3:
+                            sample_count += 1
+                            if normalize_for_match(s) in norm_chunk:
+                                matched_count += 1
+                if sample_count > 0 and (matched_count / sample_count) >= 0.2:
+                    score = CONFIDENCE_ALL_WORDS_SCORE
+                else:
+                    score = CONFIDENCE_PARTIAL_BASE
+            score = cls._apply_retrieval_boost(score, retrieval_score)
+            score = cls._apply_type_penalties(score, value, expected_type)
+            clamped = max(CONFIDENCE_CLAMP_MIN, min(CONFIDENCE_CLAMP_MAX, score))
+            return round(clamped, 2)
+
         val_str = str(value).strip()
         if not val_str:
             return settings.confidence_not_found_score
 
-        if target_chunk_text is None and expected_type is None:
+        if target_chunk_text is None and expected_type is None and not has_image:
             return settings.confidence_found_score
 
         norm_val = normalize_for_match(val_str)
         folded_val = normalize_search_text(val_str)
         score = settings.confidence_found_score
 
-        if target_chunk_text:
+        if target_chunk_text or has_image:
             score = cls._calculate_alignment_score(
                 norm_val=norm_val,
                 folded_val=folded_val,
-                target_chunk_text=target_chunk_text,
+                target_chunk_text=target_chunk_text or "",
                 expected_type=expected_type,
+                has_image=has_image,
             )
 
         score = cls._apply_retrieval_boost(score, retrieval_score)

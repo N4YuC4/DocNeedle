@@ -53,14 +53,14 @@ if src_dir.exists():
     sys.path.insert(0, str(src_dir))
 sys.path.insert(0, str(root_dir))
 
-# Preload NVIDIA CUDA runtime and cuBLAS shared libraries into global symbol space
-# (libcudart.so.12, libcublas.so.12) to ensure llama-cpp-python can link on ZeroGPU
+# Configure NVIDIA CUDA runtime library paths in LD_LIBRARY_PATH (safe in parent process;
+# does not load shared objects or invoke CUDA drivers before ZeroGPU worker allocation).
 try:
-    from docneedle.cuda_compat import preload_cuda_runtime_libs
+    from docneedle.cuda_compat import configure_cuda_library_paths
 
-    preload_cuda_runtime_libs()
+    configure_cuda_library_paths()
 except Exception as e:
-    logging.getLogger("DocNeedleSpace").debug("CUDA runtime preload info: %s", e)
+    logging.getLogger("DocNeedleSpace").debug("CUDA runtime paths configuration info: %s", e)
 
 import gradio as gr  # noqa: E402
 
@@ -79,6 +79,20 @@ if os.environ.get("SKIP_MODEL_BOOTSTRAP", "").lower() not in ("1", "true"):
         os.environ["SKIP_MODEL_BOOTSTRAP"] = "1"
     except Exception as e:
         logger.warning(f"Automatic model download check failed or bypassed: {e}")
+
+# 2. Asynchronous OS Page Cache pre-warming for GGUF models
+try:
+    import threading
+
+    from docneedle.cuda_compat import prewarm_models_page_cache
+
+    threading.Thread(
+        target=prewarm_models_page_cache,
+        daemon=True,
+        name="ModelPageCachePrewarmer",
+    ).start()
+except Exception as e:
+    logger.debug("Page cache pre-warming thread start skipped: %s", e)
 
 
 CUSTOM_CSS = """
@@ -1010,11 +1024,14 @@ def render_results_html(response_dict: dict[str, Any] | None) -> str:
         is_found = r.get("found", False)
         key = html.escape(str(r.get("key", "")))
         raw_val = r.get("value")
-        val = (
-            html.escape(str(raw_val))
-            if raw_val is not None and str(raw_val) != ""
-            else "Not found in document"
-        )
+        if isinstance(raw_val, (list, dict)):
+            val = f"<pre style='margin: 0; font-family: monospace; font-size: 11px; white-space: pre-wrap; background: #1c1c1f; padding: 6px 10px; border-radius: 6px; border: 1px solid #2e2e33;'>{html.escape(json.dumps(raw_val, indent=2, ensure_ascii=False))}</pre>"
+        else:
+            val = (
+                html.escape(str(raw_val))
+                if raw_val is not None and str(raw_val) != ""
+                else "Not found in document"
+            )
         conf = int(r.get("confidence", 0) * 100)
         evidence = r.get("evidence")
         thinking = r.get("thinking")
@@ -1376,6 +1393,7 @@ async def _async_perform_extraction_ui(
             progress(0.18, desc="📄 Parsing & inspecting document pages...")
 
         chunks_to_use = list(session_chunks) if session_chunks else []
+        t_ingest_start = time.perf_counter()
         if not chunks_to_use:
             with ingest_svc.parser:
                 for f in file_list:
@@ -1384,6 +1402,7 @@ async def _async_perform_extraction_ui(
                     filename = file_path.name
                     ingest_res = ingest_svc.ingest_bytes(content=content, filename=filename)
                     chunks_to_use.extend(ingest_res.chunks)
+        t_ingest_elapsed = time.perf_counter() - t_ingest_start
 
         if not chunks_to_use:
             err = {"error": "Could not extract readable text from the uploaded documents."}
@@ -1407,22 +1426,27 @@ async def _async_perform_extraction_ui(
         logger.info(
             f"--> [PIPELINE] Indexing {len(chunks_to_use)} text chunks across {len(file_list)} files into in-memory vector store..."
         )
+        t_index_start = time.perf_counter()
         store.add_chunks(chunks_to_use)
+        t_index_elapsed = time.perf_counter() - t_index_start
 
         if progress is not None and callable(progress):
             progress(
                 0.68,
-                desc=f"🧠 Extracting {len(queries)} field(s) with Gemma-4 Multimodal LLM...",
+                desc=f"🧠 Extracting {len(queries)} field(s) with Qwen3.5-4B Multimodal LLM...",
             )
 
         logger.info(
             f"--> [PIPELINE] Starting extraction pipeline for {len(queries)} target field query(s)..."
         )
+        t_extract_start = time.perf_counter()
         response = await extraction_svc.extract_items(queries, store)
+        t_extract_elapsed = time.perf_counter() - t_extract_start
 
         if progress is not None and callable(progress):
             progress(0.92, desc="✅ Verifying citations & calculating confidence scores...")
 
+        t_render_start = time.perf_counter()
         resp_dict = response.model_dump()
         total_time_ms = round((time.perf_counter() - start_time) * 1000.0, 2)
         resp_dict["processing_time_ms"] = total_time_ms
@@ -1431,12 +1455,23 @@ async def _async_perform_extraction_ui(
             resp_dict.get("total_items", 0),
             total_time_ms,
         )
+        rendered_html = render_results_html(resp_dict)
+        t_render_elapsed = time.perf_counter() - t_render_start
+
+        logger.info(
+            "--> [PIPELINE BREAKDOWN] Ingest: %.2fs | Vector Store: %.2fs | Extraction: %.2fs | UI Render: %.2fs | Total: %.2fs",
+            t_ingest_elapsed,
+            t_index_elapsed,
+            t_extract_elapsed,
+            t_render_elapsed,
+            total_time_ms / 1000.0,
+        )
 
         if progress is not None and callable(progress):
             progress(1.0, desc="Extraction completed")
 
         return (
-            render_results_html(resp_dict),
+            rendered_html,
             resp_dict,
             chunks_to_use,
             make_status_html(status_msg, is_success=True),
@@ -1501,11 +1536,11 @@ def _estimate_extraction_duration(
         elif vis and isinstance(vis, list):
             num_items = max(1, sum(1 for v in vis if v))
 
-        # Base duration covers initial multimodal prefill and model warmup (~67-75s)
+        # Base duration covers initial multimodal prefill and model warmup (~30-40s)
         # RAG retrieval context size is bounded (max 2 images, 5 text chunks),
         # so LLM inference workload is independent of the number of uploaded files.
-        base_duration = 75
-        item_overhead = max(0, num_items - 1) * 3
+        base_duration = int(os.environ.get("ZEROGPU_BASE_DURATION", "55"))
+        item_overhead = max(0, num_items - 1) * 2
 
         estimated = base_duration + item_overhead
         logger.info(
@@ -1513,10 +1548,10 @@ def _estimate_extraction_duration(
             estimated,
             num_items,
         )
-        return min(95, max(60, estimated))
+        return min(80, max(45, estimated))
     except Exception as e:
         logger.debug("Fallback to default ZeroGPU duration due to estimation error: %s", e)
-        return 75
+        return 60
 
 
 @gpu_decorator(duration=_estimate_extraction_duration)
@@ -2076,6 +2111,7 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         + t_inputs,
         outputs=[results_html_view, raw_json_output, session_chunks_state, doc_status_view],
         api_name=False,
+        concurrency_limit=1,
     )
 
     def on_export_results(resp_dict: dict[str, Any] | None) -> str | None:
@@ -2113,24 +2149,18 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         queue=False,
     )
 
-    # ZeroGPU keepalive and compatibility handler
-    try:
-
-        @gpu_decorator(duration=60)
-        def _zerogpu_compat_probe() -> str:
-            return ""
-
-        _zg_btn = gr.Button("ZeroGPU Init", visible=False)
-        _zg_btn.click(_zerogpu_compat_probe, outputs=[], api_name=False)
-    except Exception:
-        pass
-
 # 3. Mount complete FastAPI REST API onto Gradio App
 from gradio.routes import App  # noqa: E402
 
 from docneedle.api.routes_extract import router as extract_router  # noqa: E402
 from docneedle.api.routes_jobs import router as jobs_router  # noqa: E402
 from docneedle.main import health_check  # noqa: E402
+
+# Mount directly onto demo.app for environments where demo.launch() does not accept _app kwarg
+demo.app.include_router(extract_router)
+demo.app.include_router(jobs_router)
+demo.app.add_api_route("/healthz", health_check, methods=["GET"])
+demo.app.add_api_route("/health", health_check, methods=["GET"])
 
 gradio_app = App(
     title=settings.app_name,
@@ -2145,17 +2175,30 @@ gradio_app.add_api_route("/healthz", health_check, methods=["GET"])
 gradio_app.add_api_route("/health", health_check, methods=["GET"])
 
 if __name__ == "__main__":
-    app = gradio_app
     port = int(os.environ.get("PORT", 7860))
     logger.info(f"--> [STARTUP] Starting DocNeedle on 0.0.0.0:{port}...")
-    demo.launch(
-        _app=gradio_app,
+    res = demo.launch(
         server_name="0.0.0.0",
         server_port=port,
+        prevent_thread_lock=True,
         footer_links=[],
         css=CUSTOM_CSS,
         ssr_mode=False,
     )
+    server_app = (
+        res[0]
+        if isinstance(res, tuple) and len(res) > 0
+        else getattr(demo, "server_app", getattr(demo, "app", None))
+    )
+    if server_app is not None:
+        server_app.include_router(extract_router)
+        server_app.include_router(jobs_router)
+        server_app.add_api_route("/healthz", health_check, methods=["GET"])
+        server_app.add_api_route("/health", health_check, methods=["GET"])
+        logger.info(
+            "--> [STARTUP] FastAPI REST routes successfully mounted onto active Gradio server_app."
+        )
+    demo.block_thread()
 else:
     # Mount Gradio dashboard onto root path for external ASGI runners (e.g. uvicorn app:app)
     app = gr.mount_gradio_app(

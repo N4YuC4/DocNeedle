@@ -105,19 +105,19 @@ class TestLLMLocalEngineHelpers:
         assert _is_not_found_value("Bulunamadı", expected_type="boolean") is True
 
     def test_build_extraction_prompt_structure(self) -> None:
-        # Universal turn format when no chat_formatter is provided
+        # Standard ChatML turn format when no chat_formatter is provided
         prompt = _build_extraction_prompt(
             context="Kira: 1000 TL", query="Kira bedeli?", enable_thinking=False
         )
-        assert "<|turn>system\n" in prompt
-        assert "<|turn>user\n" in prompt
-        assert "<|turn>model\n" in prompt
+        assert "<|im_start|>system\n" in prompt
+        assert "<|im_start|>user\n" in prompt
+        assert "<|im_start|>assistant\n" in prompt
         assert "Kira: 1000 TL" in prompt
 
         prompt_thinking = _build_extraction_prompt(
             context="Kira: 1000 TL", query="Kira bedeli?", enable_thinking=True
         )
-        assert "<|channel>thought\n" in prompt_thinking
+        assert "<think>\n" in prompt_thinking
 
         # Dynamic GGUF Jinja2 chat template format (model-agnostic)
         chatml_template = (
@@ -154,12 +154,12 @@ class TestLLMLocalEngineHelpers:
         prompt = _build_extraction_prompt(
             context=long_ctx,
             query="Kira bedeli nedir?",
-            max_tokens=500,
+            max_tokens=800,
             llm=DummyLLM(),
             enable_thinking=False,
         )
         assert "Question / Target Field: Kira bedeli nedir?" in prompt
-        assert prompt.endswith("<turn|>\n<|turn>model\n")
+        assert prompt.endswith("<|im_end|>\n<|im_start|>assistant\n")
         assert "satir_499" not in prompt
 
     def test_resolve_default_model_path_strict_no_fallback(
@@ -235,6 +235,84 @@ class TestLLMLocalEngineHelpers:
         assert "Expected Data Type: money" in prompt
         assert "Monetary amount" in prompt
         assert "25.000 TL" in prompt
+
+    def test_try_parse_schema_json_handles_trailing_commas_and_fences(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_schema_json
+
+        raw_fence = """```json
+        {
+            "partner_name": "ACME CORP",
+            "active": true,
+            "shares": 100,
+        }
+        ```"""
+        ok, parsed = _try_parse_schema_json(raw_fence)
+        assert ok is True
+        assert parsed["partner_name"] == "ACME CORP"
+        assert parsed["active"] is True
+        assert parsed["shares"] == 100
+
+    def test_rescue_schema_fields_from_broken_text(self) -> None:
+        from docneedle.llm.local_engine import _rescue_schema_fields_from_text
+
+        broken_raw = """<|channel>thought
+        I need to extract schema with { braces }
+        <channel|>
+        {
+            "partner_name": "JOHN DOE",
+            "is_general_partner": true,
+            "tax_id": "12-3456789",
+            "holdings": [{"code": "A", "amount": 500}],
+            "cut_off_here":
+        """
+        fields = [
+            {"key": "partner_name"},
+            {"key": "is_general_partner"},
+            {"key": "tax_id"},
+            {"key": "holdings"},
+            {"key": "missing_field"},
+        ]
+        rescued = _rescue_schema_fields_from_text(broken_raw, fields)
+        assert rescued["partner_name"] == "JOHN DOE"
+        assert rescued["is_general_partner"] is True
+        assert rescued["tax_id"] == "12-3456789"
+        assert rescued["holdings"] == [{"code": "A", "amount": 500}]
+        assert "missing_field" not in rescued
+
+    def test_recursive_json_schema_dereferencing(self) -> None:
+        from docneedle.api.validation import dereference_json_schema
+
+        schema_with_nested_refs = {
+            "$defs": {
+                "LineItem": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "detail": {"$ref": "#/$defs/ItemDetail"},
+                    },
+                },
+                "ItemDetail": {
+                    "type": "object",
+                    "properties": {
+                        "unit_price": {"type": "number"},
+                        "quantity": {"type": "integer"},
+                    },
+                },
+            },
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {"$ref": "#/$defs/LineItem"},
+                }
+            },
+        }
+
+        resolved = dereference_json_schema(schema_with_nested_refs, schema_with_nested_refs)
+        items_prop = resolved["properties"]["items"]["items"]
+        assert "properties" in items_prop
+        assert items_prop["properties"]["name"]["type"] == "string"
+        assert items_prop["properties"]["detail"]["properties"]["unit_price"]["type"] == "number"
+        assert items_prop["properties"]["detail"]["properties"]["quantity"]["type"] == "integer"
 
 
 class TestStoreDiversityHelpers:
@@ -789,6 +867,172 @@ class TestRefactoredExtractionHelpers:
         assert evidence.snippet == "Firma unvanı: ABC Bilişim A.Ş."
         assert conf >= 0.90
 
+    @pytest.mark.asyncio
+    async def test_extract_items_unified_schema(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from docneedle.extraction.schemas import ExtractionItemQuery
+        from docneedle.extraction.service import ExtractionService
+        from docneedle.retrieval.store import SessionVectorStore
+
+        mock_llm_client = AsyncMock()
+        mock_llm_client.extract_schema.return_value = {
+            "vendor_name": {"found": True, "value": "Acme Corp", "thinking": None},
+            "invoice_total": {"found": True, "value": 1500.0, "thinking": None},
+            "is_paid": {"found": True, "value": True, "thinking": None},
+            "discount_code": {"found": False, "value": None, "thinking": None},
+        }
+
+        service = ExtractionService(llm_client=mock_llm_client)
+
+        chunk1 = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="invoice.pdf",
+            chunk_index=0,
+            text="Vendor: Acme Corp\nTotal Due: $1,500.00\nPayment Status: Paid [X]",
+            page_number=1,
+        )
+        store = SessionVectorStore(embedder=MagicMock(), reranker=MagicMock())
+        store.chunks = [chunk1]
+
+        queries = [
+            ExtractionItemQuery(key="vendor_name", description="Company or vendor name"),
+            ExtractionItemQuery(key="invoice_total", description="Total invoice amount"),
+            ExtractionItemQuery(
+                key="is_paid", description="Whether invoice is paid", type="boolean"
+            ),
+            ExtractionItemQuery(key="discount_code", description="Discount coupon or code"),
+        ]
+
+        response = await service.extract_items(queries, store)
+        assert response.status == "completed"
+        assert response.total_items == 4
+        assert response.found_items == 3
+
+        mock_llm_client.extract_schema.assert_called_once()
+        res_by_key = {r.key: r for r in response.results}
+        assert res_by_key["vendor_name"].found is True
+        assert res_by_key["vendor_name"].value == "Acme Corp"
+        assert res_by_key["invoice_total"].found is True
+        assert res_by_key["invoice_total"].value == 1500.0
+        assert res_by_key["is_paid"].found is True
+        assert res_by_key["is_paid"].value is True
+        assert res_by_key["discount_code"].found is False
+        assert res_by_key["discount_code"].value is None
+
+    @pytest.mark.asyncio
+    async def test_extract_items_single_query_unified_schema(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from docneedle.extraction.schemas import ExtractionItemQuery
+        from docneedle.extraction.service import ExtractionService
+        from docneedle.retrieval.store import SessionVectorStore
+
+        mock_llm_client = AsyncMock()
+        mock_llm_client.extract_schema.return_value = {
+            "tables": {
+                "found": True,
+                "value": [{"table_number": "1", "rows": [{"row_label": "A", "values": ["1"]}]}],
+                "thinking": None,
+            }
+        }
+
+        service = ExtractionService(llm_client=mock_llm_client)
+        chunk1 = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="stats.pdf",
+            chunk_index=0,
+            text="Table 1. Stats\nA 1",
+            page_number=1,
+        )
+        store = SessionVectorStore(embedder=MagicMock(), reranker=MagicMock())
+        store.chunks = [chunk1]
+
+        query = ExtractionItemQuery(key="tables", description="All tables", type="array")
+        response = await service.extract_items([query], store)
+        assert response.status == "completed"
+        assert response.total_items == 1
+        assert response.found_items == 1
+
+        mock_llm_client.extract_schema.assert_called_once()
+        assert response.results[0].key == "tables"
+        assert response.results[0].found is True
+
+    @pytest.mark.asyncio
+    async def test_extract_single_item_delegation(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from docneedle.extraction.schemas import ExtractionItemQuery
+        from docneedle.extraction.service import ExtractionService
+        from docneedle.retrieval.store import SessionVectorStore
+
+        mock_llm_client = AsyncMock()
+        mock_llm_client.extract_schema.return_value = {
+            "title": {"found": True, "value": "Sample Document", "thinking": None}
+        }
+
+        service = ExtractionService(llm_client=mock_llm_client)
+        chunk1 = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="doc.pdf",
+            chunk_index=0,
+            text="Sample Document",
+            page_number=1,
+        )
+        store = SessionVectorStore(embedder=MagicMock(), reranker=MagicMock())
+        store.chunks = [chunk1]
+
+        query = ExtractionItemQuery(key="title", description="Document title", type="string")
+        result = await service._extract_single_item(query, store)
+        assert result.key == "title"
+        assert result.found is True
+        assert result.value == "Sample Document"
+        mock_llm_client.extract_schema.assert_called_once()
+
+    def test_try_parse_schema_json_array(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_schema_json
+
+        raw_array = '[{"table_number": "1", "rows": [{"row_label": "X", "values": ["100"]}]}]'
+        ok, parsed = _try_parse_schema_json(raw_array)
+        assert ok is True
+        assert isinstance(parsed, list)
+        assert len(parsed) == 1
+        assert parsed[0]["table_number"] == "1"
+
+    def test_normalize_typed_value_heals_flattened_rows(self) -> None:
+        from docneedle.llm.local_engine import _normalize_typed_value
+
+        items_schema = {
+            "type": "object",
+            "properties": {
+                "table_number": {"type": "string"},
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "row_label": {"type": "string"},
+                            "values": {"type": "array"},
+                        },
+                    },
+                },
+            },
+        }
+        val = [
+            {
+                "table_number": "1",
+                "rows": [
+                    {"row_label": "11.1", "value_1": "105", "value_2": "118"},
+                ],
+            }
+        ]
+        ok, norm = _normalize_typed_value(val, expected_type="array", items_schema=items_schema)
+        assert ok is True
+        assert norm[0]["rows"][0]["values"] == ["105", "118"]
+
 
 class TestConfigTomlLoading:
     """Test TOML configuration loading and resolution."""
@@ -1085,9 +1329,179 @@ class TestRerankerStrictNoFallbackAndErrors:
             get_reranker(force=True)
         assert "CUDA out of memory for reranker" in str(exc_info.value)
 
-        monkeypatch.setattr(reranker_mod, "Qwen3Reranker", mock_init_fail)
 
-        # Calling get_reranker(force=True) must fail fast and propagate the exception
-        with pytest.raises(RuntimeError) as exc_info:
-            get_reranker(force=True)
-        assert "CUDA out of memory for reranker" in str(exc_info.value)
+class TestStructuredTableExtraction:
+    """Test schema-driven structured table/list extraction logic."""
+
+    def test_try_parse_json_value_clean_array(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_json_value
+
+        raw = '[{"item": "0001", "description": "fuel"}, {"item": "0002", "description": "oil"}]'
+        ok, parsed = _try_parse_json_value(raw)
+        assert ok is True
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert parsed[0]["item"] == "0001"
+
+    def test_try_parse_json_value_markdown_codeblock(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_json_value
+
+        raw = '```json\n[\n  {"clin": "0001", "qty": 10}\n]\n```'
+        ok, parsed = _try_parse_json_value(raw)
+        assert ok is True
+        assert isinstance(parsed, list)
+        assert len(parsed) == 1
+        assert parsed[0]["clin"] == "0001"
+
+    def test_try_parse_json_value_truncated_array(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_json_value
+
+        truncated = (
+            '[\n  {"item": "0001", "desc": "fuel"},\n'
+            '  {"item": "0002", "desc": "oil"},\n'
+            '  {"item": "0003", "desc": "pa'
+        )
+        ok, parsed = _try_parse_json_value(truncated)
+        assert ok is True
+        assert isinstance(parsed, list)
+        assert len(parsed) == 2
+        assert parsed[0]["item"] == "0001"
+        assert parsed[1]["item"] == "0002"
+
+    def test_try_parse_json_value_empty_array(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_json_value
+
+        ok, parsed = _try_parse_json_value("[]")
+        assert ok is True
+        assert parsed == []
+
+    def test_try_parse_json_value_non_json(self) -> None:
+        from docneedle.llm.local_engine import _try_parse_json_value
+
+        ok, parsed = _try_parse_json_value("Not found in document excerpts.")
+        assert ok is False
+        assert parsed is None
+
+    def test_build_type_instruction_with_schema(self) -> None:
+        from docneedle.llm.local_engine import _build_type_instruction
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "item_no": {"type": "string", "description": "Item number"},
+                "unit_price": {"type": "number", "description": "Price per unit"},
+            },
+        }
+        inst = _build_type_instruction(expected_type="list", items_schema=schema)
+        assert "JSON array of objects" in inst
+        assert "item_no" in inst
+        assert "unit_price" in inst
+
+    def test_normalize_typed_value_table_json(self) -> None:
+        from docneedle.llm.local_engine import _normalize_typed_value
+
+        raw = '[{"name": "Alice"}, {"name": "Bob"}]'
+        is_found, val = _normalize_typed_value(raw, expected_type="list")
+        assert is_found is True
+        assert isinstance(val, list)
+        assert len(val) == 2
+
+    def test_normalize_typed_value_empty_list(self) -> None:
+        from docneedle.llm.local_engine import _normalize_typed_value
+
+        is_found, val = _normalize_typed_value("[]", expected_type="list")
+        assert is_found is False
+        assert val is None
+
+    def test_normalize_typed_value_boolean(self) -> None:
+        from docneedle.llm.local_engine import _normalize_typed_value
+
+        found_yes, val_yes = _normalize_typed_value("Yes", expected_type="boolean")
+        assert found_yes is True
+        assert val_yes is True
+
+        found_no, val_no = _normalize_typed_value("No", expected_type="boolean")
+        assert found_no is True
+        assert val_no is False
+
+        found_f, val_f = _normalize_typed_value("false", expected_type="boolean")
+        assert found_f is True
+        assert val_f is False
+
+    def test_is_label_hallucination_comprehensive(self) -> None:
+        from docneedle.llm.local_engine import _is_label_hallucination
+
+        # Should detect prompt key echo
+        assert _is_label_hallucination("change previous method", "change_previous_method") is True
+        assert (
+            _is_label_hallucination(
+                "a. previous method",
+                "change_previous_method",
+                "Previous method used: specify",
+            )
+            is True
+        )
+
+        # Should NOT reject genuine extracted values
+        assert _is_label_hallucination("Leonteq Securities AG", "filing_manager_name") is False
+        assert _is_label_hallucination("$1,341,725,655", "table_value_total_usd") is False
+        assert _is_label_hallucination("No", "is_amendment") is False
+
+    def test_confidence_calculator_with_list_value(self) -> None:
+        from docneedle.extraction.verifier import ConfidenceCalculator
+
+        table_data = [{"item": "Widget A", "price": "10.00"}]
+        chunk_text = "Standard supplies: 10 units of Widget A at price 10.00 each."
+        score = ConfidenceCalculator.calculate(
+            found=True,
+            value=table_data,
+            target_chunk_text=chunk_text,
+            expected_type="list",
+        )
+        assert score >= 0.80
+
+    def test_find_best_supporting_match_with_list(self) -> None:
+        from docneedle.extraction.service import _find_best_supporting_match
+
+        chunk1 = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="doc.pdf",
+            page_number=1,
+            chunk_index=0,
+            text="General terms and conditions.",
+        )
+        chunk2 = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d1",
+            doc_name="doc.pdf",
+            page_number=2,
+            chunk_index=1,
+            text="Schedule of supplies: Item 0001 Aviation Fuel JP-8.",
+        )
+        sr1 = SearchResult(chunk=chunk1, score=0.5)
+        sr2 = SearchResult(chunk=chunk2, score=0.4)
+
+        table_data = [{"item": "0001", "description": "Aviation Fuel JP-8"}]
+        best = _find_best_supporting_match(table_data, [sr1, sr2])
+        assert best.chunk.page_number == 2
+
+    def test_schema_item_query_and_result_native_support(self) -> None:
+        from docneedle.extraction.schemas import ExtractionItemQuery, ExtractionItemResult
+
+        q = ExtractionItemQuery(
+            key="line_items",
+            description="All line items",
+            type="list",
+            items_schema={"properties": {"item": {"type": "string"}}},
+        )
+        assert q.items_schema is not None
+
+        res = ExtractionItemResult(
+            key="line_items",
+            found=True,
+            value=[{"item": "0001"}],
+            confidence=0.95,
+        )
+        assert isinstance(res.value, list)
+        assert res.value[0]["item"] == "0001"

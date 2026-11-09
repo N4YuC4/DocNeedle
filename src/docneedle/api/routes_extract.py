@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
@@ -36,18 +37,18 @@ def _estimate_api_extract_duration(
     """Dynamically estimate ZeroGPU reservation duration for synchronous API extraction."""
     try:
         num_items = len(items_dicts) if items_dicts else 1
-        base_duration = 75
-        item_overhead = max(0, num_items - 1) * 3
+        base_duration = int(os.environ.get("ZEROGPU_BASE_DURATION", "55"))
+        item_overhead = max(0, num_items - 1) * 2
         estimated = base_duration + item_overhead
         logger.info(
             "--> [ZeroGPU API Duration] Estimated reservation: %ds (items=%d)",
             estimated,
             num_items,
         )
-        return min(95, max(60, estimated))
+        return min(80, max(45, estimated))
     except Exception as e:
         logger.debug("Fallback to default ZeroGPU API duration: %s", e)
-        return 75
+        return 60
 
 
 @gpu_decorator(duration=_estimate_api_extract_duration)

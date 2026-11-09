@@ -1,0 +1,17 @@
+{
+  "benchmark": "ExtractBench",
+  "split": "medium",
+  "timestamp": "2026-11-08T18:45:35.622471+00:00",
+  "total_documents": 98,
+  "total_fields": 2808,
+  "matched_fields": 2159,
+  "unified_value_f1": 0.6953,
+  "value_precision": 0.7955,
+  "value_recall": 0.6175,
+  "perfect_documents": 1,
+  "perfect_document_rate": 0.0102,
+  "strict_null_accuracy": 0.849,
+  "page_grounding_accuracy": 0.5503,
+  "avg_latency_ms": 67845.57,
+  "total_benchmark_time_seconds": 6648.87
+}

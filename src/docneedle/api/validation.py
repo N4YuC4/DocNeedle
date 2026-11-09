@@ -1,7 +1,7 @@
 """Request validation and parsing utilities for DocNeedle API endpoints."""
 
 import json
-from typing import Final
+from typing import Any, Final
 
 from fastapi import HTTPException, UploadFile
 
@@ -11,12 +11,60 @@ from docneedle.extraction.schemas import ExtractionItemQuery
 BYTES_PER_MEGABYTE: Final[int] = 1024 * 1024
 
 
+def dereference_json_schema(sub_schema: Any, root_schema: dict[str, Any], depth: int = 0) -> Any:
+    """Recursively resolve all $ref pointers throughout a JSON Schema structure."""
+    if depth > 20:
+        return sub_schema
+
+    if isinstance(sub_schema, dict):
+        if "$ref" in sub_schema and isinstance(sub_schema["$ref"], str):
+            ref_str = sub_schema["$ref"]
+            if ref_str.startswith("#/"):
+                parts = ref_str[2:].split("/")
+                cur: Any = root_schema
+                for p in parts:
+                    if isinstance(cur, dict) and p in cur:
+                        cur = cur[p]
+                    else:
+                        cur = None
+                        break
+                if isinstance(cur, dict):
+                    dereferenced = {k: v for k, v in sub_schema.items() if k != "$ref"}
+                    resolved_target = dereference_json_schema(cur, root_schema, depth + 1)
+                    if isinstance(resolved_target, dict):
+                        return {**resolved_target, **dereferenced}
+                    return resolved_target
+
+        return {
+            k: dereference_json_schema(v, root_schema, depth + 1) for k, v in sub_schema.items()
+        }
+
+    if isinstance(sub_schema, list):
+        return [dereference_json_schema(item, root_schema, depth + 1) for item in sub_schema]
+
+    return sub_schema
+
+
 def parse_extraction_schema(items_schema: str) -> list[ExtractionItemQuery]:
     """Parse and validate extraction schema JSON payload into query models."""
     try:
         raw_items = json.loads(items_schema)
         if isinstance(raw_items, dict):
+            if "$defs" in raw_items or "definitions" in raw_items:
+                raw_items = dereference_json_schema(raw_items, raw_items)
             raw_items = [raw_items]
+        elif isinstance(raw_items, list):
+            deref_items = []
+            for it in raw_items:
+                if isinstance(it, dict) and isinstance(it.get("items_schema"), dict):
+                    it_copy = dict(it)
+                    it_copy["items_schema"] = dereference_json_schema(
+                        it["items_schema"], it["items_schema"]
+                    )
+                    deref_items.append(it_copy)
+                else:
+                    deref_items.append(it)
+            raw_items = deref_items
         items = [ExtractionItemQuery.model_validate(it) for it in raw_items]
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid schema JSON format: {e}") from e

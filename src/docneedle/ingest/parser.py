@@ -16,8 +16,19 @@ from docling_core.types.doc.document import DoclingDocument
 from PIL import Image
 
 from docneedle.config import settings
+from docneedle.ingest.acroform import (
+    _extract_acroform_fields_by_page,
+    _format_acroform_fields_markdown,
+)
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "DoclingParser",
+    "_extract_acroform_fields_by_page",
+    "_format_acroform_fields_markdown",
+]
+
 
 # Readability & CMap validation thresholds
 CORRUPTED_CHAR_RATIO_THRESHOLD = 0.03
@@ -30,7 +41,7 @@ _GARBLED_MIDWORD_SYMBOLS = ("$", "<", ">", "*", "\\", "]")
 
 
 def _is_extracted_text_readable(text: str, min_chars: int | None = None) -> bool:
-    """Validate that digital PDF text is genuinely readable and not a broken ToUnicode CMap."""
+    """Validate that digital PDF text is readable and not a broken ToUnicode CMap."""
     threshold = settings.ocr_fallback_min_chars if min_chars is None else min_chars
     cleaned = text.strip()
     if len(cleaned) < threshold:
@@ -76,8 +87,33 @@ _PAGE_HEADING_LINE_RE = re.compile(r"^##\s+Sayfa\s+\d+\s*$")
 
 
 def _format_clean_lines(text: str) -> str:
-    """Strip blank lines and join non-empty lines with double newlines for markdown blocks."""
-    return "\n\n".join(ln.strip() for ln in text.splitlines() if ln.strip())
+    """Strip blank lines and join non-empty lines, coalescing single-char vertical runs."""
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not raw_lines:
+        return ""
+
+    merged_lines: list[str] = []
+    current_char_run: list[str] = []
+
+    def _flush_char_run() -> None:
+        if not current_char_run:
+            return
+        # Only coalesce if run consists of alphabetic letters and length >= 2
+        if len(current_char_run) >= 2 and all(c.isalpha() for c in current_char_run):
+            merged_lines.append("".join(current_char_run))
+        else:
+            merged_lines.extend(current_char_run)
+        current_char_run.clear()
+
+    for ln in raw_lines:
+        if len(ln) == 1:
+            current_char_run.append(ln)
+        else:
+            _flush_char_run()
+            merged_lines.append(ln)
+    _flush_char_run()
+
+    return "\n\n".join(merged_lines)
 
 
 def _extract_markdown_body(md_text: str) -> str:
@@ -112,6 +148,9 @@ def _markdown_to_docling_document(
         stripped = line.strip()
         if not stripped:
             flush()
+            continue
+        if stripped.startswith(r"\#"):
+            current_lines.append("#" + stripped[2:])
             continue
         if stripped.startswith("#"):
             flush()
@@ -167,6 +206,15 @@ class DoclingParser:
         pdf = pypdfium2.PdfDocument(path_obj)
         page_images: dict[int, bytes] = {}
         try:
+            page_acroforms = _extract_acroform_fields_by_page(pdf)
+            total_acro_fields = sum(len(f) for f in page_acroforms.values())
+            if total_acro_fields > 0:
+                logger.info(
+                    "--> [AcroForm] Extracted %d interactive form fields from '%s'",
+                    total_acro_fields,
+                    title,
+                )
+
             md_parts = [f"# {title}\n"]
             for i in range(len(pdf)):
                 page_idx = i + 1
@@ -178,11 +226,24 @@ class DoclingParser:
                     finally:
                         text_page.close()
 
+                    # Always preserve high-resolution visual page image in memory
+                    # to support multimodal extraction and visual RAG for forms & degraded OCR text
+                    img_bytes = _render_pdf_page_image(page)
+                    page_images[page_idx] = img_bytes
+
+                    acro_table = _format_acroform_fields_markdown(page_acroforms.get(page_idx, {}))
+
                     if text and _is_extracted_text_readable(
                         text, min_chars=settings.ocr_fallback_min_chars
                     ):
                         page_content = _format_clean_lines(text)
-                        md_parts.append(f"## Sayfa {page_idx}\n\n{page_content}\n")
+                        # Escape leading hashes in page body lines so they are treated as content,
+                        # not structural markdown headings
+                        escaped_content = "\n".join(
+                            (r"\#" + ln[1:]) if ln.lstrip().startswith("#") else ln
+                            for ln in page_content.splitlines()
+                        )
+                        md_parts.append(f"## Sayfa {page_idx}\n\n{acro_table}{escaped_content}\n")
                     else:
                         logger.info(
                             "--> [Visual Page] Page %d/%d of '%s' is scanned; preserving image.",
@@ -190,11 +251,9 @@ class DoclingParser:
                             len(pdf),
                             title,
                         )
-                        img_bytes = _render_pdf_page_image(page)
-                        page_images[page_idx] = img_bytes
-                        md_parts.append(
-                            f"## Sayfa {page_idx}\n\n[Görsel Belge Sayfası {page_idx} - {title}]\n"
-                        )
+                        visual_marker = f"[Görsel Belge Sayfası {page_idx} - {title}]"
+                        content = f"{acro_table}{visual_marker}" if acro_table else visual_marker
+                        md_parts.append(f"## Sayfa {page_idx}\n\n{content}\n")
                 finally:
                     page.close()
         finally:

@@ -118,9 +118,6 @@ class Qwen3Reranker:
                 f"Qwen3-Reranker model file exists at '{self.model_path}' but failed to initialize "
                 f"or execute in llama.cpp ({type(e).__name__}): {e}"
             ) from e
-        # Release the unused per-token vocabulary logits buffer in llama-cpp-python:
-        # score() reads logits directly from self.llm._ctx.get_logits() and never uses self.scores.
-        self.llm.scores = np.empty((0, self.llm.n_vocab()), dtype=np.single)
         self.token_false_id = self.llm.tokenize(b"no", add_bos=False)[0]
         self.token_true_id = self.llm.tokenize(b"yes", add_bos=False)[0]
         self._lock = threading.Lock()

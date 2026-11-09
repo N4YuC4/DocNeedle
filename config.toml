@@ -1,16 +1,35 @@
 # ==============================================================================
-# DocNeedle Application & Pipeline Configuration (config.toml)
+# DocNeedle Application & Pipeline Configuration / Yapılandırma (config.toml)
 # ==============================================================================
-# Privacy-first local RAG document extraction microservice.
-# Values can be overridden via OS environment variables (e.g. GPU_ENABLED=false).
+# EN: Privacy-first local RAG document extraction microservice.
+# TR: Gizlilik odaklı, yerel RAG belge bilgi çıkarım mikrosrvisi.
+# EN: Values can be overridden via OS environment variables (e.g. GPU_ENABLED=false).
+# TR: Değerler ortam değişkenleri (örn. GPU_ENABLED=false) ile geçersiz kılınabilir.
 # ==============================================================================
 
 [server]
+# EN: Application identifier name displayed in OpenAPI documentation, UI, and logs
+# TR: OpenAPI belgelerinde, kullanıcı arayüzünde ve loglarda gösterilen uygulama adı
 app_name = "DocNeedle"
+
+# EN: Semantic release version of the DocNeedle microservice
+# TR: DocNeedle uygulamasının semantik sürüm numarası
 app_version = "0.1.0"
+
+# EN: Enable debug mode for verbose logging, diagnostic traces, and reload capabilities
+# TR: Ayrıntılı loglama, hata ayıklama çıktıları ve yeniden yükleme için hata ayıklama modu
 debug = false
+
+# EN: Network interface IP address to bind the HTTP server to (0.0.0.0 binds to all available interfaces)
+# TR: HTTP sunucusunun dinleyeceği ağ arayüzü IP adresi (0.0.0.0 tüm arayüzleri dinler)
 host = "0.0.0.0"
+
+# EN: TCP port number on which the FastAPI / Gradio application listens
+# TR: FastAPI / Gradio uygulamasının çalışacağı TCP port numarası
 port = 8000
+
+# EN: Allowed Cross-Origin Resource Sharing (CORS) origins permitted to communicate with the REST API
+# TR: REST API ile iletişim kurmasına izin verilen CORS (Çapraz Kaynak Paylaşımı) kökenleri
 cors_origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -21,85 +40,266 @@ cors_origins = [
 ]
 
 [hardware]
-# Enable CUDA GPU offloading (auto-detected on HF Spaces ZeroGPU)
+# EN: Enable CUDA GPU offloading (auto-detected on HF Spaces ZeroGPU or via GPU_ENABLED env var)
+# TR: CUDA GPU hızlandırmasını etkinleştirir (HF Spaces ZeroGPU'da veya GPU_ENABLED ile otomatik algılanır)
 gpu_enabled = true
-# -1 offloads all layers to GPU; 0 keeps execution on CPU
+
+# EN: Number of neural model layers offloaded to GPU (-1 offloads all layers; 0 keeps execution on CPU)
+# TR: GPU'ya aktarılacak model katmanı sayısı (-1 tüm katmanları GPU'ya aktarır; 0 tamamen CPU'da çalıştırır)
 llm_n_gpu_layers = -1
-model_n_batch = 512
+
+# EN: Logical batch token count processed simultaneously by llama.cpp during prompt evaluation
+# TR: Prompt işleme sırasında llama.cpp tarafından aynı anda işlenen mantıksal token (batch) sayısı
+model_n_batch = 256
+
+# EN: Physical micro-batch token count evaluated in a single GPU kernel launch
+# TR: Tek bir GPU kernel çağrısında işlenen fiziksel mikro-batch token sayısı
+model_n_ubatch = 256
+
+# EN: Maximum sequence context window size (in tokens) reserved for the cross-encoder reranker
+# TR: Çapraz kodlayıcı (reranker) için ayrılan maksimum bağlam penceresi boyutu (token cinsinden)
 reranker_n_ctx = 2048
-# 8-bit quantized KV cache (GGML_TYPE_Q8_0) saves 50% context RAM
-model_kv_cache_type_k = 8
-model_kv_cache_type_v = 8
+
+# EN: Quantization data type for the LLM key cache (1 = GGML_TYPE_F16, standard stable FP16 KV cache)
+# TR: LLM key önbelleği kuantizasyon türü (1 = GGML_TYPE_F16, standart kararlı FP16 KV önbelleği)
+model_kv_cache_type_k = 1
+
+# EN: Quantization data type for the LLM value cache (1 = GGML_TYPE_F16, standard stable FP16 KV cache)
+# TR: LLM value önbelleği kuantizasyon türü (1 = GGML_TYPE_F16, standart kararlı FP16 KV önbelleği)
+model_kv_cache_type_v = 1
+
+# EN: Enable FlashAttention in llama.cpp (accelerates prompt eval on GPU with FP16 KV cache)
+# TR: llama.cpp FlashAttention desteği (FP16 KV önbellek ile GPU'da prompt işlemesini hızlandırır)
 model_flash_attn = true
 
 [ingest]
+# EN: Maximum allowable file size for individual uploaded documents in megabytes
+# TR: Yüklenen tekil belgeler için megabayt cinsinden maksimum dosya boyutu
+max_upload_size_mb = 100
+
+# EN: High-resolution rasterization scale factor for rendering PDF pages to visual JPEG chunks (1.5 = ~150 DPI)
+# TR: PDF sayfalarını görsel JPEG parçalarına dönüştürme rasterize ölçek katsayısı (1.5 = ~150 DPI)
 pdf_render_scale = 1.5
+
+# EN: Minimum character threshold required on a page to qualify as readable digital text rather than scanned imagery
+# TR: Bir sayfanın taranmış görsel yerine okunabilir dijital metin sayılması için gereken asgari karakter sayısı
 pdf_embedded_text_min_chars = 50
+
+# EN: Maximum number of initial pages inspected to verify digital text readability before OCR-free scan classification
+# TR: Dijital metin okunabilirliğini doğrulamak için taranacak maksimum başlangıç sayfa sayısı
 pdf_embedded_text_max_check_pages = 5
+
+# EN: Enable in-memory caching of parsed document representations to accelerate multi-query sessions
+# TR: Çoklu sorgu oturumlarını hızlandırmak için ayrıştırılmış belgelerin bellekte önbelleğe alınması
 ingestion_cache_enabled = true
 
 [chunker]
+# EN: Hugging Face tokenizer identifier used for token counting, text splitting, and chunk boundary calculations
+# TR: Token sayımı, metin bölme ve parça sınırı hesaplamalarında kullanılan Hugging Face tokenizer modeli
 tokenizer_model = "Qwen/Qwen3-Reranker-0.6B"
+
+# EN: Target maximum token budget allocated for individual chunk boundaries
+# TR: Tekil metin parçaları için hedeflenen maksimum token bütçesi
 max_tokens = 768
+
+# EN: Re-attach column header rows when splitting wide/tall markdown tables across multiple chunks
+# TR: Büyük markdown tabloları parçalara bölünürken sütun başlıklarını her parçada yeniden ekleme
 repeat_table_header = true
+
+# EN: Coalesce adjacent small sibling text chunks sharing the same structural section heading
+# TR: Aynı yapısal başlığı paylaşan küçük ardışık kardeş metin parçalarını birleştirme
 merge_peers = true
-max_chunk_chars = 2500
+
+# EN: Soft character limit for a chunk before enforcing boundary splits
+# TR: Parça sınırını bölmeye zorlamadan önceki esnek karakter limiti
+max_chunk_chars = 4000
+
+# EN: Minimum character length threshold below which small chunks are coalesced with subsequent peers
+# TR: Altındaki küçük parçaların sonraki parçalarla birleştirileceği asgari karakter uzunluğu eşiği
 min_split_chars = 200
+
+# EN: Overflow multiplier allowing a chunk to marginally exceed max_tokens to preserve sentence or table row integrity
+# TR: Cümle veya tablo satırı bütünlüğünü korumak için max_tokens değerinin aşılmasına izin veren çarpan
 overflow_factor = 1.25
 
 [bm25]
+# EN: Okapi BM25 term frequency saturation parameter (higher values increase non-linear term saturation)
+# TR: Okapi BM25 terim frekansı doygunluk parametresi (yüksek değerler terim tekrarı etkisini artırır)
 k1 = 1.5
+
+# EN: Okapi BM25 document length normalization parameter (0.75 applies standard document length penalty)
+# TR: Okapi BM25 belge uzunluğu normalizasyon parametresi (0.75 standart belge uzunluğu cezasını uygular)
 b = 0.75
+
+# EN: Number of candidate document chunks retrieved from the sparse keyword index per extraction query
+# TR: Her bilgi çıkarım sorgusunda seyrek anahtar kelime indeksinden getirilecek aday parça sayısı
 top_k = 10
 
 [embedding]
+# EN: Hugging Face model repository path for the local GGUF dense embedding model
+# TR: Yerel GGUF yoğun vektör gömme modeli için Hugging Face model depo yolu
 model = "unsloth/embeddinggemma-2-GGUF"
+
+# EN: GGUF quantization variant (e.g. ud-q4_k_xl for optimal speed, accuracy, and VRAM efficiency)
+# TR: GGUF kuantizasyon türü (hız, doğruluk ve VRAM dengesi için örn. ud-q4_k_xl)
 quantization = "ud-q4_k_xl"
+
+# EN: Dense vector output dimensionality produced by the embedding model (768 for EmbeddingGemma-2)
+# TR: Gömme modelinin ürettiği yoğun vektör boyutu (EmbeddingGemma-2 için 768)
 dimension = 768
+
+# EN: Batch size for vectorized embedding generation across multiple text chunks
+# TR: Birden fazla metin parçası için vektör gömme üretiminde kullanılan batch boyutu
 batch_size = 4
+
+# EN: Query prompt template formatting user search queries into task-specific embedding representations
+# TR: Kullanıcı arama sorgularını göreve özgü gömme temsiline biçimlendiren sorgu şablonu
 instruction = "task: search result | query: {text}"
+
+# EN: Document passage prompt template formatting chunks with title and content metadata
+# TR: Belge parçalarını başlık ve içerik üst verileriyle biçimlendiren metin şablonu
 doc_instruction = "title: {doc_name} | text: {text}"
 
 [retrieval]
+# EN: Final number of top-ranked context chunks returned by hybrid Reciprocal Rank Fusion (RRF)
+# TR: Hibrit Karşılıklı Sıralama Birleştirmesi (RRF) ile döndürülen nihai en iyi bağlam parça sayısı
 top_k = 10
+
+# EN: Smoothing constant (k=60) added to ranks in Reciprocal Rank Fusion to balance dense vs sparse scores
+# TR: Yoğun ve seyrek skorları dengelemek için RRF sıralamasına eklenen yumuşatma sabiti (k=60)
 rrf_constant = 60
+
+# EN: Enable neural cross-encoder reranking (disabled by default on CPU to maintain low latency)
+# TR: Sinirsel çapraz kodlayıcı ile yeniden sıralama (düşük gecikme için CPU'da varsayılan olarak kapalıdır)
 reranker_enabled = false
+
+# EN: Hugging Face model identifier for the local Qwen3-Reranker cross-encoder model
+# TR: Yerel Qwen3-Reranker çapraz kodlayıcı modeli için Hugging Face model kimliği
 reranker_model = "Qwen/Qwen3-Reranker-0.6B"
+
+# EN: Number of top hybrid search candidates forwarded to the cross-encoder reranker
+# TR: Çapraz kodlayıcıya yeniden sıralama için iletilen en iyi hibrit arama adaylarının sayısı
 reranker_candidate_k = 4
+
+# EN: Final count of highest-scoring passages retained after cross-encoder scoring
+# TR: Çapraz kodlayıcı puanlaması sonrasında tutulan en yüksek puanlı metin parçası sayısı
 rerank_top_k = 3
+
+# EN: Maximum chunks permitted from the same document in the final context to promote document diversity
+# TR: Belge çeşitliliğini korumak amacıyla aynı belgeden nihai bağlama alınabilecek maksimum parça sayısı
 max_chunks_per_document = 2
+
+# EN: Prompt instruction prefix passed to the cross-encoder query input field
+# TR: Çapraz kodlayıcı sorgu giriş alanına iletilen yönlendirici talimat metni
 reranker_instruction = "Given a web search query, retrieve relevant passages that answer the query"
 
 [llm]
-model_name = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
-mmproj_name = "mmproj-F16"
-n_ctx = 16384
+# EN: GGUF model filename for the local Qwen3.5-4B instruction-tuned multimodal LLM
+# TR: Yerel Qwen3.5-4B talimat uyarlamalı çok modlu LLM modelinin GGUF dosya adı
+model_name = "Qwen3.5-4B-Q4_K_M"
+
+# EN: Multimodal projector GGUF filename (vision encoder) used for visual page understanding
+# TR: Görsel sayfa anlama için kullanılan çok modlu projektör (vizyon kodlayıcı) GGUF dosya adı
+mmproj_name = "mmproj-Qwen3.5-4B-F16"
+
+# EN: Total token context window allocated for LLM inference (KV cache allocated to this dimension)
+# TR: LLM çıkarımı için ayrılan toplam token bağlam penceresi (KV önbelleği bu boyutta açılır)
+n_ctx = 32768
+
+# EN: Sampling temperature for token generation (0.0 enforces greedy deterministic extraction)
+# TR: Token üretimi örnekleme sıcaklığı (0.0 kesin ve deterministik çıkarım sağlar)
 temperature = 0.0
+
+# EN: Nucleus sampling probability cutoff (0.95 restricts sampling to the top 95% cumulative probability mass)
+# TR: Çekirdek örnekleme olasılık sınırı (0.95 kümülatif olasılığın en yüksek %95'i ile sınırlar)
 top_p = 0.95
-max_tokens = 2048
+
+# EN: Maximum generation token limit allocated for multi-row structured table / list extractions
+# TR: Çok satırlı yapılandırılmış tablo veya liste çıkarımları için ayrılan maksimum üretim token limiti
+max_tokens = 4096
+
+# EN: Generation token limit allocated for single scalar field extractions
+# TR: Tekil skaler alan çıkarımları için ayrılan üretim token limiti
 single_field_max_tokens = 128
+
+# EN: Extended token generation ceiling when internal chain-of-thought reasoning is enabled
+# TR: Dahili düşünme/akıl yürütme modu aktifken izin verilen genişletilmiş üretim token tavanı
 thinking_max_tokens = 512
+
+# EN: Enable deep reasoning traces (<thought>...</thought>) before outputting final extracted values
+# TR: Nihai değeri üretmeden önce modelin derin düşünme adımları (<thought>...</thought>) üretmesini sağlar
 enable_thinking = false
+
+# EN: When enabled, logs full extraction prompts, thoughts, and raw LLM answers for debugging (PII sensitive)
+# TR: Hata ayıklama için çıkarım prompt'larını, düşünce zincirini ve ham LLM cevaplarını loglar (Kişisel Veri içerebilir)
 log_extraction_payloads = false
-stop_tokens = ["</s>", "<turn|>", "<end_of_turn>", "<|turn>", "<|im_end|>", "<|eot_id|>"]
-# Prompt lookup speculative decoding for fast in-process token generation
+
+# EN: Sequence of end-of-turn delimiter tokens that immediately halt LLM text generation
+# TR: LLM metin üretimini derhal durduran tur sonu belirteç dizisi
+stop_tokens = ["<|im_end|>", "<|endoftext|>", "</s>"]
+
+# EN: Enable prompt lookup speculative decoding for faster token generation on supported GPUs
+# TR: Desteklenen GPU'larda daha hızlı token üretimi için prompt lookup spekülatif kod çözmeyi etkinleştirir
 speculative_enabled = false
+
+# EN: Enable speculative decoding on CPU (disabled by default to prevent memory bandwidth saturation)
+# TR: CPU üzerinde spekülatif kod çözmeyi etkinleştirir (bellek bant genişliğini tüketmemek için varsayılan: kapalı)
 speculative_cpu_enabled = false
+
+# EN: Maximum model vocabulary size threshold under which speculative decoding is permitted
+# TR: Spekülatif kod çözmeye izin verilen maksimum model kelime dağarcığı (vocab) boyutu eşiği
 speculative_max_vocab_size = 65536
+
+# EN: Number of speculative lookahead candidate tokens predicted per forward pass
+# TR: Her ileri geçişte tahmin edilen spekülatif ileriye dönük aday token sayısı
 speculative_num_pred_tokens = 5
+
+# EN: Maximum n-gram window size used to match repeating prompt sequences during speculative decoding
+# TR: Spekülatif kod çözme sırasında tekrarlayan dizileri eşleştirmek için kullanılan maksimum n-gram pencere boyutu
 speculative_max_ngram_size = 2
 
 [extraction]
+# EN: Number of highest-relevance retrieved chunks assembled into prompt context for each target field
+# TR: Her hedef alan için prompt bağlamına dahil edilecek en yüksek alaka düzeyine sahip parça sayısı
 top_k = 5
+
+# EN: Maximum number of fields extracted simultaneously in a unified schema batch pass
+# TR: Birleşik şema çıkarım geçişinde aynı anda çıkarılacak maksimum alan sayısı (toplu paket boyutu)
+schema_batch_size = 35
+
+# EN: Separator string inserted between adjacent retrieved document chunks in the LLM context prompt
+# TR: LLM bağlam prompt'undaki ardışık belge parçaları arasına yerleştirilen ayraç dizgisi
 context_delimiter = "\n\n---\n\n"
+
+# EN: Base confidence score assigned when an entity is successfully confirmed in the document
+# TR: İstenen veri belgede başarıyla tespit ve teyit edildiğinde atanan temel güven puanı
 confidence_found_score = 0.95
+
+# EN: Fixed confidence score assigned when the requested entity cannot be found (strict null score)
+# TR: İstenen veri belgede bulunamadığında atanan sabit güven puanı (katı null skoru)
 confidence_not_found_score = 0.0
+
+# EN: Time-to-live retention duration (in minutes) for completed background extraction jobs held in RAM
+# TR: Tamamlanan arka plan çıkarım işlerinin RAM'de tutulacağı yaşam süresi (TTL - dakika cinsinden)
 job_retention_minutes = 15
+
+# EN: Relative or absolute filesystem directory path where local quantized GGUF models are stored
+# TR: Yerel kuantize GGUF modellerinin depolandığı göreceli veya mutlak dosya sistemi dizin yolu
 model_storage_dir = "models"
 
 [security]
+# EN: Maximum number of query extraction fields allowed per extraction request
+# TR: Tek bir çıkarım isteğinde izin verilen maksimum şema alanı / soru sayısı
 max_schema_items = 50
-max_upload_files = 20
-max_total_upload_size_mb = 100
-max_concurrent_jobs = 10
 
+# EN: Maximum number of document files allowed in a single multi-part batch upload
+# TR: Tek bir çok parçalı toplu yükleme isteğinde izin verilen maksimum belge sayısı
+max_upload_files = 20
+
+# EN: Aggregate upload size limit across all files in a single request (in megabytes)
+# TR: Tek bir istekteki tüm dosyaların toplam boyutu için megabayt cinsinden üst sınır
+max_total_upload_size_mb = 100
+
+# EN: Maximum number of concurrent background extraction jobs permitted in memory simultaneously
+# TR: Bellekte aynı anda çalışmasına izin verilen maksimum eşzamanlı arka plan işi sayısı
+max_concurrent_jobs = 10

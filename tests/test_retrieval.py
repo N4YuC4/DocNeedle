@@ -270,3 +270,34 @@ def test_session_vector_store_with_image_chunks() -> None:
     store.clear()
     assert len(store.chunks) == 0
     assert store.embeddings is None
+
+
+def test_hybrid_visual_chunk_preserves_text_and_image() -> None:
+    """Verify that hybrid chunks with both digital text and page image retain both capabilities."""
+    embedder = MockDeterministicEmbedder(dimension=128)
+    store = SessionVectorStore(embedder=embedder)
+
+    hybrid_chunk = DocumentChunk(
+        chunk_id="hybrid_1",
+        doc_id="doc_k1",
+        doc_name="k1_tax_form.pdf",
+        chunk_index=0,
+        text="Ordinary business income loss Box 1 partner TELCO EXPERTS",
+        page_number=1,
+        image_bytes=b"fake_jpeg_rendered_page_bytes",
+    )
+
+    store.add_chunks([hybrid_chunk])
+    assert len(store.chunks) == 1
+    assert store.embeddings is not None
+
+    # Search by textual query
+    results = store.search("ordinary business income", top_k=1)
+    assert len(results) == 1
+    matched = results[0]
+    assert matched.chunk.chunk_id == "hybrid_1"
+    assert matched.chunk.text.startswith("Ordinary business income")
+    assert matched.chunk.image_bytes == b"fake_jpeg_rendered_page_bytes"
+
+    store.clear()
+    assert len(store.chunks) == 0

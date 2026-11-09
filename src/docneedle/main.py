@@ -159,6 +159,10 @@ def check_models_status() -> HealthModelsInfo:
         else f"{settings.llm_mmproj_name}.gguf"
     )
     llm_mmproj_path = models_dir / "llm" / mmproj_name
+    if not llm_mmproj_path.exists():
+        alt_path = models_dir / "llm" / "mmproj-F16.gguf"
+        if alt_path.exists():
+            llm_mmproj_path = alt_path
 
     emb_path = models_dir / "embedding" / "embeddinggemma-2-UD-Q4_K_XL.gguf"
     emb_mmproj_path = models_dir / "embedding" / "mmproj-F16.gguf"

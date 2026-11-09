@@ -177,7 +177,10 @@ class DoclingChunker:
         overflow_factor: float | None = None,
     ) -> bool:
         """Evaluate if two consecutive chunks are eligible for coalescence."""
-        if current.image_bytes is not None or candidate.image_bytes is not None:
+        if (current.image_bytes is not None or candidate.image_bytes is not None) and (
+            current.page_number != candidate.page_number
+            or current.image_bytes != candidate.image_bytes
+        ):
             return False
         max_chars = settings.chunker_max_chunk_chars if max_chunk_chars is None else max_chunk_chars
         min_chars = settings.chunker_min_split_chars if min_split_chars is None else min_split_chars
@@ -230,6 +233,7 @@ class DoclingChunker:
             page_number=current.page_number or candidate.page_number,
             heading=current.heading or candidate.heading,
             is_table=current.is_table or candidate.is_table,
+            image_bytes=current.image_bytes or candidate.image_bytes,
             metadata={"headings": merged_headings, "pages": merged_pages},
         )
 

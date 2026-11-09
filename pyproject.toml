@@ -3,6 +3,7 @@ name = "docneedle"
 version = "0.1.0"
 description = "Privacy-first local RAG document extraction microservice"
 readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.115.0",

@@ -1,15 +1,3 @@
----
-title: DocNeedle
-emoji: 📑
-colorFrom: blue
-colorTo: indigo
-sdk: gradio
-sdk_version: 6.30.0
-python_version: 3.12
-app_file: app.py
-pinned: false
----
-
 <p align="center">
   <img src="assets/logo.svg" alt="DocNeedle Logo" width="130" />
 </p>
@@ -17,9 +5,9 @@ pinned: false
 <h1 align="center">DocNeedle</h1>
 
 <p align="center">
-  <strong>Privacy-First Local RAG Document Extraction Microservice & Standalone UI</strong><br/>
-  Extract structured key-value data with verified citations and confidence scores using local in-process AI models.<br/>
-  Zero external API calls, zero disk leakage, and OCR-free visual RAG.
+  <strong>Enterprise-Grade Local Document Extraction Microservice & Interactive Platform</strong><br/>
+  Extract schema-governed structured data with auditable source citations and statistical confidence scoring using local, in-process neural models.<br/>
+  Zero external API reliance, strict zero-disk volatile memory guarantees, and OCR-free visual RAG.
 </p>
 
 <p align="center">
@@ -38,41 +26,17 @@ pinned: false
 - [Overview](#overview)
 - [Key Features](#key-features)
 - [Tech Stack](#tech-stack)
+- [Benchmark](#benchmark--extractbench-leaderboard-comparison)
 - [Prerequisites](#prerequisites)
 - [Getting Started](#getting-started)
-  - [1. Clone Repository](#1-clone-repository)
-  - [2. Install System Dependencies](#2-install-system-dependencies)
-  - [3. Setup Python 3.14t Environment with `uv`](#3-setup-python-314t-environment-with-uv)
-  - [4. Install Project Dependencies](#4-install-project-dependencies)
-  - [5. Download Quantized Models](#5-download-quantized-models)
-  - [6. Configuration](#6-configuration)
-  - [7. Launch the Application](#7-launch-the-application)
 - [System Architecture](#system-architecture)
-  - [Directory Structure](#directory-structure)
-  - [End-to-End Extraction Lifecycle](#end-to-end-extraction-lifecycle)
-  - [Data Flow](#data-flow)
-  - [Zero-Disk Privacy Guarantee](#zero-disk-privacy-guarantee)
-  - [Supported Data Types](#supported-data-types)
+- [Web Dashboard](#web-dashboard-gradio-6-ui)
 - [API Reference](#api-reference)
-  - [Endpoints Overview](#endpoints-overview)
-  - [Synchronous Extraction (`POST /v1/extract`)](#synchronous-extraction-post-v1extract)
-  - [Asynchronous Job Creation (`POST /v1/jobs`)](#asynchronous-job-creation-post-v1jobs)
-  - [Job Status Polling (`GET /v1/jobs/{job_id}`)](#job-status-polling-get-v1jobsjob_id)
-  - [Real-Time SSE Streaming (`GET /v1/jobs/{job_id}/events`)](#real-time-sse-streaming-get-v1jobsjob_idevents)
-  - [Health & Diagnostics (`GET /healthz`)](#health--diagnostics-get-healthz)
 - [Configuration Reference](#configuration-reference)
-  - [Configuration File (`config.toml`)](#configuration-file-configtoml)
-  - [Environment Variables](#environment-variables)
-- [Available Scripts & Commands](#available-scripts--commands)
+- [Available Scripts](#available-scripts)
 - [Testing](#testing)
-  - [Running the Test Suite](#running-the-test-suite)
-  - [Test Suite Organization](#test-suite-organization)
-  - [Important Note on Dev Server VRAM](#important-note-on-dev-server-vram)
 - [Production Deployment](#production-deployment)
-  - [Docker & Docker Compose](#docker--docker-compose)
-  - [Hugging Face Spaces (ZeroGPU)](#hugging-face-spaces-zerogpu)
-  - [Bare-Metal / Systemd Service](#bare-metal--systemd-service)
-- [Troubleshooting & FAQs](#troubleshooting--faqs)
+- [Troubleshooting](#troubleshooting--faqs)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -80,28 +44,32 @@ pinned: false
 
 ## Overview
 
-**DocNeedle** is a privacy-first, local document information extraction microservice and web application. It takes raw, unstructured documents (**PDF**, **DOCX**, **XLSX**, and high-resolution **images**) alongside a user-defined JSON schema, and extracts target values paired with exact textual citations, source document provenance, page numbers, and statistical confidence scores.
+**DocNeedle** is a privacy-first local document extraction microservice with an interactive web application. It ingests unstructured documents (**PDF**, **DOCX**, **XLSX**, high-resolution **images**) together with a user-defined JSON schema, and returns target values with exact textual citations, source document provenance, page numbers, and confidence scores.
 
-Unlike traditional document extraction pipelines, DocNeedle operates with:
-- **Zero Cloud Reliance:** All neural models run locally in-process via `llama-cpp-python` with native CUDA/cuBLAS acceleration.
-- **Zero Disk Leakage:** Uploaded document payloads, vector embeddings, and search indices reside strictly in volatile RAM and are purged immediately after execution.
-- **OCR-Free Visual RAG:** Digital PDFs are parsed for structural text, while scanned documents and images are ingested as high-resolution visual page chunks. Purely visual pages are embedded cross-modally via the SigLIP vision projector (`mmproj-F16.gguf`) and extracted directly by the multimodal Gemma-4 LLM, completely bypassing fragile OCR engines.
+Unlike pipelines built on cloud APIs or brittle OCR engines, DocNeedle provides:
+
+- **Zero cloud reliance:** All models run in-process via native multi-architecture `llama.cpp` bindings and C++ shared libraries with hardware acceleration.
+- **Zero-disk privacy:** Payloads, embeddings, and indices live only in volatile RAM and are purged unconditionally after each request (`store.clear()`).
+- **OCR-free visual RAG:** Digital PDFs are parsed for text and tables; scanned documents and images are ingested as high-resolution page chunks, embedded cross-modally (SigLIP projector) and read directly by the multimodal Qwen3.5-4B LLM.
+- **Free-threaded concurrency:** Python 3.14t (PEP 703, No-GIL) for true multi-core parsing, chunking, and HTTP handling.
 
 ---
 
 ## Key Features
 
-- **Strict Zero-Disk Privacy Guarantee:** Memory vector store (`SessionVectorStore`) is in-memory only. Vectors, chunks, and temp files are cleared in `finally: store.clear()`. Nothing is saved to external vector databases or disk.
-- **In-Process Multimodal Neural Models:**
-  - **LLM:** Gemma-4 E2B-IT GGUF (`gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf` + `mmproj-F16.gguf`) with schema-constrained JSON extraction.
-  - **Cross-Modal Embedder:** EmbeddingGemma-2 GGUF (`embeddinggemma-2-UD-Q4_K_XL.gguf` + `mmproj-F16.gguf`) for unified dense text and visual page embeddings.
-  - **Reranker:** Qwen3-Reranker-0.6B GGUF (`Qwen3-Reranker-0.6B.Q4_K_M.gguf`) for optional cross-encoder logit scoring.
-- **Python 3.14t Free-Threaded (No-GIL):** True multi-core parallelism across parsing, chunking, and HTTP concurrency without Python Global Interpreter Lock contention.
-- **8-Bit Quantized KV Cache:** Llama.cpp instances configure `type_k=8` and `type_v=8` (`GGML_TYPE_Q8_0`) with Flash Attention, cutting context RAM by 50% and enabling a 16,384 token window within ~4.4 GB RAM.
-- **Speculative Prompt Lookup Decoding:** Automatically accelerates in-process token generation via `LlamaPromptLookupDecoding` (`max_ngram_size=2`, `num_pred_tokens=5` CPU / `10` GPU).
-- **Hybrid RRF Retrieval:** Dense cosine similarity and sparse Okapi BM25 keyword matching are fused via Reciprocal Rank Fusion ($RRF=60$) with document diversity limits.
-- **Unified Standalone UI + REST API:** Dark-mode Gradio 6 dashboard running on the exact same port (`7860`) as the full FastAPI REST API, featuring real-time Server-Sent Events (SSE) streaming for asynchronous background jobs.
-- **ZeroGPU & Multi-Arch CUDA Ready:** Precompiled CUDA cubin libraries for `sm_80`, `sm_86`, `sm_89`, and `sm_120a` architectures with seamless ZeroGPU dynamic leasing via `@spaces.GPU`.
+- **Zero-Disk Persistence:** `SessionVectorStore` is strictly in-memory; vectors, chunks, and temp files are cleared in `finally: store.clear()`.
+- **In-Process Multimodal Models:**
+  - **LLM:** Qwen3.5-4B GGUF (`Qwen3.5-4B-Q4_K_M.gguf` + `mmproj-Qwen3.5-4B-F16.gguf`), schema-constrained JSON extraction.
+  - **Cross-Modal Embedder:** EmbeddingGemma-2 GGUF (`embeddinggemma-2-UD-Q4_K_XL.gguf` + `mmproj-F16.gguf`), unified text and visual page embeddings.
+  - **Reranker:** Qwen3-Reranker-0.6B GGUF (`Qwen3-Reranker-0.6B.Q4_K_M.gguf`), optional cross-encoder scoring.
+- **Native C++ Embedder:** `libdocneedle_embed.so` (loaded via `ctypes`) runs GGUF inference and SigLIP projection without intermediate serialization.
+- **AcroForm Direct Extraction:** Interactive PDF form fields are parsed via `pypdfium2` (`ingest/acroform.py`) before chunking, with no hallucination.
+- **Spatial Collision Resolution:** `SpatialCollisionResolver` (`extraction/collision.py`) assigns a repeated salient value only to the field with the highest context affinity.
+- **FP16 / Quantized KV Cache & Flash Attention:** High-speed Flash Attention with stable FP16 KV cache (`model_kv_cache_type_k/v = 1`, configurable to Q8_0) supporting a 32,768-token window in compact VRAM.
+- **Speculative Prompt Lookup Decoding:** `LlamaPromptLookupDecoding` (`max_ngram_size=2`, `num_pred_tokens=5`), opt-in.
+- **Hybrid RRF Retrieval:** Dense cosine + Okapi BM25 fused via Reciprocal Rank Fusion ($RRF=60$) with document-diversity constraints.
+- **Unified UI + REST API:** Dark-mode Gradio 6 dashboard and FastAPI on the same port (`7860`), with SSE streaming for async jobs.
+- **ZeroGPU & Multi-Arch CUDA:** Precompiled multi-architecture CUDA binaries (embedded `sm_80`, `sm_86`, `sm_89`, `sm_120a` kernels in `libggml-cuda.so`); dynamic leasing via `@spaces.GPU`.
 
 ---
 
@@ -109,52 +77,106 @@ Unlike traditional document extraction pipelines, DocNeedle operates with:
 
 | Layer | Technologies |
 | :--- | :--- |
-| **Runtime & Language** | Python 3.14t (Free-Threaded, PEP 703 No-GIL) |
-| **Microservice Framework** | FastAPI 0.115+, Uvicorn 0.32+, Pydantic v2, Pydantic-Settings |
-| **Web Dashboard** | Gradio 6.30+, Dark Mode, Dynamic Schema Builder, Dual Formatted/Raw JSON Tabs |
-| **Document Ingestion** | Docling Core 2.15+, pypdfium2 (high-res rendering), python-docx, openpyxl, Pillow |
-| **Neural Embeddings** | EmbeddingGemma-2 UD-Q4_K_XL GGUF + SigLIP mmproj-F16 (768 dimensions) |
+| **Runtime** | Python 3.14t (Free-Threaded, PEP 703 No-GIL) |
+| **Microservice** | FastAPI 0.115+, Uvicorn 0.32+, Pydantic v2, Pydantic-Settings |
+| **Web Dashboard** | Gradio 6+, dark mode, dynamic schema builder, formatted/raw JSON tabs |
+| **Ingestion** | Docling Core 2.15+, pypdfium2, python-docx, openpyxl, Pillow |
+| **AcroForm** | pypdfium2 native bindings (`FPDFPage_GetAnnot`, `FPDFAnnot_GetFormFieldValue`) |
+| **Embeddings** | EmbeddingGemma-2 UD-Q4_K_XL GGUF + SigLIP mmproj-F16 (768 dim), native `libdocneedle_embed.so` |
 | **Lexical Search** | rank-bm25 (Okapi BM25) |
-| **Cross-Encoder Reranker**| Qwen3-Reranker-0.6B Q4_K_M GGUF (via llama.cpp logit evaluation) |
-| **Multimodal LLM Engine**| Gemma-4 E2B-IT GGUF (Q4_K_XL) + mmproj-F16 (16k context, 8-bit KV cache) |
-| **Inference Backend** | llama-cpp-python 0.3.x with native CUDA/cuBLAS bindings |
-| **Package Management** | `uv` (Astral) |
-| **Container & Cloud** | Docker, Docker Compose, Hugging Face Spaces (Zero-A10G ZeroGPU) |
+| **Reranker** | Qwen3-Reranker-0.6B Q4_K_M GGUF (llama.cpp logit scoring) |
+| **LLM Engine** | Qwen3.5-4B-Q4_K_M GGUF + mmproj-Qwen3.5-4B-F16 (16k context, Flash Attention) |
+| **Inference Backend** | llama-cpp-python 0.3.x with CUDA/cuBLAS |
+| **Packaging & Deployment** | `uv`, Hugging Face Spaces (ZeroGPU A10G / A100) |
+
+---
+
+## Benchmark & ExtractBench Leaderboard Comparison
+
+### Overview & Methodology
+
+DocNeedle was evaluated on **[ExtractBench](https://www.extractbench.ai/)** ([LlamaIndex](https://github.com/run-llama/ExtractBench), [arXiv:2607.29677](https://arxiv.org/abs/2607.29677)), an enterprise benchmark for schema-guided document extraction: **370 documents**, **4,869 pages**, **13,577 annotated fields** across scanned invoices, regulatory forms, bank statements, contracts, multi-page financial tables, and handwritten notations.
+
+- **Short (252 docs, 10,676 fields):** up to 10 pages.
+- **Medium (98 docs, 2,808 fields):** 11–50 pages.
+- **Long (20 docs, 93 fields):** over 50 pages.
+
+Tracked metrics: **Unified Value F1** (failed documents score 0), **Page Grounding Accuracy**, **Strict Null Accuracy** (no hallucination for absent fields), **Cost per Page**, and **Data Privacy & Disk Security**.
+
+### Curated Leaderboard Comparison
+
+Source: official `leaderboard.csv` from [run-llama/ExtractBench](https://github.com/run-llama/ExtractBench) ([leaderboard](https://www.extractbench.ai/#leaderboard)).
+
+| System / Model | Provider / Category | Architecture & Size | Overall F1 | Short (≤10p) | Medium (11-50p) | Long (>50p) | Page Grounding | Cost / Page | Privacy & Storage |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **LlamaExtract Agentic Plus** | LlamaIndex | Cloud Agentic Pipeline | **96.17%** | 97.02% | 94.30% | 94.65% | 88.26% | $0.0750 | Cloud API (External) |
+| **Codex (GPT-6.1 Sol Evidence)** | OpenAI / Codex | Frontier Coding Agent | **95.31%** | 97.01% | 92.96% | 85.46% | 89.37% | $0.0713 | Cloud API (External) |
+| **Claude Code (Sonnet 5.5 Evidence)** | Anthropic | Frontier Coding Agent | **94.68%** | 96.22% | 92.97% | 83.69% | 75.99% | $0.0569 | Cloud API (External) |
+| **OpenAI GPT-6 Astra** | OpenAI | Commercial Frontier VLM | **91.91%** | 97.22% | 90.56% | 31.70% | 0.00% *(N/A)* | $0.1109 | Cloud API (External) |
+| **Qwen3.5 4B (Raw Base Model)** | Alibaba / OSS | Standalone Base Model | **82.43%** | 89.06% | 76.64% | 27.31% | 0.00% *(N/A)* | Free (self-host) | Self-Hosted / Local |
+| **Google Gemini 3.8 Flash** | Google | Commercial Fast VLM | **80.71%** | 88.14% | 72.23% | 28.70% | 0.00% *(N/A)* | $0.0043 | Cloud API (External) |
+| **DocNeedle (In-Process)** | **DocNeedle** | **Qwen3.5-4B + Gemma2-RAG** | **75.78%** | **77.30%** | **69.53%** | **70.59%** | **78.82%** | **$0.00 (on-premise)** | **Zero-Disk RAM / Air-Gapped** |
+
+> [!TIP]
+> **Model-agnostic scaling:** The published results (**75.78% Overall F1**, **90.70% Short Grounding**) use a compact **4B model** (`Qwen3.5-4B-Q4_K_M`, ~2.6 GB VRAM) and a **0.6B embedder** to validate operation on commodity hardware (6 GB VRAM minimum, or multi-core CPUs). Ingestion, AcroForm parsing, hybrid RAG, and collision resolution are model-agnostic, so larger weights (e.g. **Qwen3.5-9B**, **Qwen3.5-35B**) offer a scaling path toward **88%–95%+ F1** while keeping zero-disk privacy and zero per-page fees.
+
+### Key Insights & Trade-offs
+
+- **Long-Document Resilience (+43.28 pts vs. base model):** Beyond 50 pages, unaugmented models suffer attention degradation (raw Qwen3.5 4B drops from 89.06% to 27.31%, GPT-6 Astra to 31.70%). DocNeedle sustains **70.59% F1** (2.5× improvement) by routing relevant visual/text chunks into a bounded context.
+- **Auditable Page Grounding (90.70% short, 78.82% overall):** Unlike raw VLMs that score 0.00% on source attribution, DocNeedle pairs every extracted value with verified page numbers and verbatim text snippets.
+- **Deterministic Form Extraction:** Native PDF AcroForm parsing via `pypdfium2` extracts interactive checkboxes and field inputs without OCR artifacts.
+- **Local Privacy & Predictable Costs:** Runs 100% in-process with zero network telemetry; vectors and chunk images reside in volatile RAM and are wiped via `finally: store.clear()`.
+- **Engineering Trade-offs:** Dense single-page documents may experience retrieval filtering on isolated clauses (77.30% F1 vs. 89.06% unconstrained base model), and local multimodal inference averages ~34.7s/doc on workstation GPUs.
+
+### Detailed Results by Split
+
+Generated by `scripts/benchmark_extractbench.py` and stored in `benchmark_results/`:
+
+| Metric | Short (≤10p) | Medium (11-50p) | Long (>50p) | Full (370 docs) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Documents** | 252 | 98 | 20 | **370** |
+| **Target Fields** | 10,676 | 2,808 | 93 | **13,577** |
+| **Strictly Matched Fields** | 8,776 | 2,159 | 59 | **10,994** |
+| **Unified Value F1** | **77.30%** | **69.53%** | **70.59%** | **75.78%** |
+| **Value Precision** | **81.37%** | **79.55%** | **80.60%** | **81.04%** |
+| **Value Recall** | **73.62%** | **61.75%** | **62.79%** | **71.16%** |
+| **Page Grounding** | **90.70%** | **55.03%** | **45.58%** | **78.82%** |
+| **Strict Null Accuracy** | **82.34%** | **84.90%** | **27.78%** | **82.74%** |
+| **Perfect Documents Rate** | 3.57% (9) | 1.02% (1) | 0.00% (0) | **2.70% (10)** |
+| **Avg. Latency / Document** | 34.7 s | 67.8 s | 95.9 s | **46.9 s** |
+| **Total Execution Time** | 2h 30m 38s | 1h 50m 48s | 32m 11s | **4h 49m 28s** |
+
+### Reproducing the Benchmark
+
+```bash
+uv run python app.py                                                          # 1. start the server
+uv run python scripts/benchmark_extractbench.py --split short                 # 2. short split
+uv run python scripts/benchmark_extractbench.py --split all --api-url http://localhost:7860  # 3. all 370 documents
+cat benchmark_results/summary_short.json benchmark_results/summary_all.json   # 4. view summaries
+```
+
+Per-document logs, ground-truth diffs, and summary metrics are saved to `benchmark_results/`.
 
 ---
 
 ## Prerequisites
 
-Before setting up DocNeedle, ensure your host system satisfies the following requirements:
-
-### Operating System & Hardware
-- **OS:** Linux (Ubuntu 22.04/24.04, Debian 12, Arch, or Fedora recommended). macOS and Windows WSL2 are supported.
-- **RAM:** Minimum 8 GB (16 GB recommended for CPU-only inference).
-- **GPU (Optional, Highly Recommended):** NVIDIA GPU with CUDA 12.0+ (Compute Capability $\ge$ 8.0: RTX 30/40/50 series, A100, H100, Blackwell). DocNeedle runs comfortably on 8 GB VRAM.
-- **Storage:** ~5 GB free space for quantized model weights and tokenizers.
-
-### System Packages (Linux)
-Document parsing (Docling/pypdfium2) and graphical image processing require OpenGL and GLib shared libraries:
+- **OS:** Linux (Ubuntu 22.04/24.04, Debian 12, Arch, Fedora recommended). On Windows, use WSL2 (Ubuntu 22.04/24.04 recommended); native Windows and macOS are not supported because the bundled native libraries (`libdocneedle_embed.so`, `libllama.so`, `libggml-*.so`) are Linux ELF binaries.
+- **RAM:** 8 GB minimum (16 GB recommended for CPU-only inference).
+- **GPU (optional):** NVIDIA, CUDA 12.0+, Compute Capability ≥ 8.0 (RTX 30/40/50, A100, H100, Blackwell). Fits within 6 GB VRAM (minimum).
+- **Storage:** ~5 GB for model weights and tokenizers.
+- **System packages** (OpenGL and GLib for Docling/pypdfium2):
 
 ```bash
 # Ubuntu / Debian
-sudo apt-get update && sudo apt-get install -y \
-    build-essential \
-    cmake \
-    curl \
-    git \
-    libgl1 \
-    libglib2.0-0
-
+sudo apt-get update && sudo apt-get install -y build-essential cmake curl git libgl1 libglib2.0-0
 # Fedora / RHEL
 sudo dnf install -y gcc gcc-c++ cmake curl git mesa-libGL glib2
-
 # Arch Linux
 sudo pacman -S base-devel cmake curl git mesa glib2
 ```
 
-### Package Manager
-DocNeedle uses [`uv`](https://github.com/astral-sh/uv) for fast, deterministic Python environment management:
+- **[`uv`](https://github.com/astral-sh/uv):**
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -164,112 +186,63 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ## Getting Started
 
-Follow these steps to set up DocNeedle on a clean development machine:
-
-### 1. Clone Repository
+### 1. Clone and Create the Environment
 
 ```bash
 git clone https://github.com/N4YuC4/DocNeedle.git
 cd DocNeedle
-```
 
-### 2. Install System Dependencies
-
-Ensure the required libraries are installed (see [Prerequisites](#prerequisites)):
-
-```bash
-sudo apt-get install -y libgl1 libglib2.0-0
-```
-
-### 3. Setup Python 3.14t Environment with `uv`
-
-DocNeedle is built for Python 3.14t (free-threaded, GIL disabled). `uv` handles downloading and managing free-threaded Python binaries automatically:
-
-```bash
-# Install free-threaded Python 3.14t
-uv python install 3.14t
-
-# Create virtual environment with GIL disabled
+uv python install 3.14t        # free-threaded Python
 uv venv --python 3.14t
-
-# Activate the virtual environment
 source .venv/bin/activate
-```
 
-Verify your Python interpreter is running free-threaded:
-
-```bash
 python -c "import sys; print('Free-threaded (No-GIL):', not getattr(sys, '_is_gil_enabled', lambda: True)())"
-# Output should be: Free-threaded (No-GIL): True
+# Expected: Free-threaded (No-GIL): True
 ```
 
-### 4. Install Project Dependencies
-
-Install all core dependencies and development tools:
+### 2. Install Dependencies
 
 ```bash
 uv sync
 ```
 
 > [!NOTE]
-> If compiling `llama-cpp-python` with CUDA acceleration locally, ensure CUDA toolkit paths are exported:
+> To compile `llama-cpp-python` with CUDA locally, export the toolkit paths first:
 > ```bash
 > export CUDACXX=/usr/local/cuda/bin/nvcc
 > export CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=native"
 > uv pip install --no-build-isolation "llama-cpp-python>=0.3.0,<0.4.0"
 > ```
 
-### 5. Download Quantized Models
-
-DocNeedle relies on compact, high-precision quantized GGUF models. Run the automated model downloader script:
+### 3. Download Quantized Models
 
 ```bash
 uv run python scripts/download_models.py
 ```
 
-This downloads the required models into the `models/` directory (~4.5 GB total):
-- `models/embedding/embeddinggemma-2-UD-Q4_K_XL.gguf` (Cross-modal embedder)
-- `models/embedding/mmproj-F16.gguf` (Vision projector for embedder)
-- `models/reranker/Qwen3-Reranker-0.6B.Q4_K_M.gguf` (Cross-encoder reranker)
-- `models/llm/gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf` (Multimodal Gemma-4 IT LLM)
-- `models/llm/mmproj-F16.gguf` (Vision projector for LLM)
-- Hugging Face chunker tokenizer: `Qwen/Qwen3-Reranker-0.6B`
+Automatically downloads the required quantized weights (~4.5 GB) into `models/` (EmbeddingGemma-2 cross-modal embedder, Qwen3.5-4B GGUF, SigLIP vision projectors, and reranker). Pass `--embedding`, `--reranker`, or `--llm` to download specific groups.
 
-*To download individual models selectively, pass `--embedding`, `--reranker`, or `--llm` flags to the script.*
+### 4. Configure
 
-### 6. Configuration
+Settings load from `config.toml`; optionally override via `.env` (`cp .env.example .env 2>/dev/null || touch .env`). Key defaults:
 
-DocNeedle loads configuration from `config.toml` by default. You can inspect or customize settings:
+- `gpu_enabled = true`: CUDA offload if available (`false` for CPU-only).
+- `llm_n_gpu_layers = -1`: offload all layers (`0` = CPU).
+- `reranker_enabled = false`: disabled by default for low latency; enable for maximum citation precision.
 
-```bash
-# Optional: copy example environment file if you wish to override via env vars
-cp .env.example .env 2>/dev/null || touch .env
-```
+### 5. Launch
 
-Key default configurations in `config.toml`:
-- `gpu_enabled = true`: Enables CUDA offloading if available. Set to `false` for CPU-only.
-- `llm_n_gpu_layers = -1`: Offloads all layers to GPU (`0` runs on CPU).
-- `reranker_enabled = false`: Disabled by default on CPU for ultra-low latency; enable for maximum citation precision.
-
-### 7. Launch the Application
-
-#### Option A: Unified Gradio Web Dashboard + FastAPI REST API (Default)
-
-Launch the unified server hosting both the web UI and the complete REST API on port `7860`:
+**Unified Gradio UI + FastAPI (default, port `7860`):**
 
 ```bash
 uv run python app.py
 ```
 
-Once running, access the services:
-- **Gradio Web Dashboard:** [http://localhost:7860](http://localhost:7860)
-- **Interactive Swagger OpenAPI Docs:** [http://localhost:7860/docs](http://localhost:7860/docs)
-- **ReDoc Documentation:** [http://localhost:7860/redoc](http://localhost:7860/redoc)
-- **Health & Hardware Diagnostics:** [http://localhost:7860/healthz](http://localhost:7860/healthz)
+- Dashboard: [http://localhost:7860](http://localhost:7860)
+- Swagger: [http://localhost:7860/docs](http://localhost:7860/docs) · ReDoc: [http://localhost:7860/redoc](http://localhost:7860/redoc)
+- Health: [http://localhost:7860/healthz](http://localhost:7860/healthz)
 
-#### Option B: Standalone API-Only Server
-
-If you only need the headless REST microservice without the Gradio UI:
+**API-only server (port `8000`):**
 
 ```bash
 uv run uvicorn docneedle.main:app --host 0.0.0.0 --port 8000 --reload
@@ -283,294 +256,202 @@ uv run uvicorn docneedle.main:app --host 0.0.0.0 --port 8000 --reload
 
 ```
 DocNeedle/
-├── assets/                       # Branding logo (SVG) and static UI icons
+├── assets/                       # Logo (SVG) and static icons
 ├── app.py                        # Unified Gradio 6 UI + FastAPI root mount & ZeroGPU entry
-├── config.toml                   # Primary application, model & pipeline configuration
-├── pyproject.toml                # Project specification, dependencies, build settings & tools
-├── requirements.txt              # Standard pip-compatible dependency specification
-├── Dockerfile                    # Multi-stage Python 3.14-slim container specification
-├── docker-compose.yml            # Standalone container orchestration configuration
+├── config.toml                   # Application, model & pipeline configuration
+├── pyproject.toml / requirements.txt
+├── Dockerfile / docker-compose.yml
 ├── scripts/
-│   ├── download_models.py        # Model downloader with progress tracking and verification
-│   └── deploy_space.sh           # One-click deployment to Hugging Face Spaces (ZeroGPU)
-├── models/                       # Local model storage (GGUF weights and vision projectors)
-│   ├── embedding/                # EmbeddingGemma-2 GGUF & SigLIP mmproj-F16
-│   ├── reranker/                 # Qwen3-Reranker-0.6B Q4_K_M GGUF
-│   └── llm/                      # Gemma-4-E2B-IT GGUF & SigLIP mmproj-F16
+│   ├── download_models.py        # Model downloader with verification
+│   ├── benchmark_extractbench.py # ExtractBench runner (Value F1, Grounding F1)
+│   └── deploy_space.sh           # Hugging Face Spaces (ZeroGPU) deployment
+├── models/                       # embedding/, reranker/, llm/ (GGUF + projectors)
 ├── src/docneedle/
-│   ├── main.py                   # FastAPI application factory, CORS, and /healthz endpoint
-│   ├── config.py                 # Central Pydantic BaseSettings (TOML + env var loading)
-│   ├── cuda_compat.py            # ZeroGPU preloaders & dynamic memory leasing wrappers
-│   ├── api/
-│   │   ├── routes_extract.py     # POST /v1/extract (synchronous extraction endpoint)
-│   │   ├── routes_jobs.py        # POST /v1/jobs, GET /v1/jobs/{id}, GET /v1/jobs/{id}/events
-│   │   └── validation.py         # File size checks, payload reading & JSON schema validation
-│   ├── jobs/                     # Asynchronous background job worker & SSE event broadcasting
-│   │   ├── models.py             # JobStatus, JobProgress, JobCreateResponse, JobStatusResponse
-│   │   └── manager.py            # In-memory job registry, subscriber queues & TTL eviction
-│   ├── ingest/                   # Document parsing & chunking subsystem
-│   │   ├── parser.py             # Docling parser + pypdfium2 high-res rendering (OCR-free)
-│   │   ├── chunker.py            # DoclingChunker with table headers & visual page chunking
-│   │   ├── models.py             # DocumentChunk, IngestionResult models
-│   │   ├── cache.py              # Ingestion cache to avoid duplicate rendering
-│   │   └── service.py            # Ingestion coordinator service
-│   ├── retrieval/                # Hybrid search & vector store subsystem
-│   │   ├── embedder.py           # EmbeddingGemma2Embedder (multilingual text + visual embedding)
-│   │   ├── worker.py             # IsolatedEmbeddingClient (process-isolated embedder host)
-│   │   ├── bm25.py               # BM25Engine (Okapi BM25 sparse keyword index)
-│   │   ├── reranker.py           # Qwen3Reranker (cross-encoder logit scoring via llama.cpp)
-│   │   ├── store.py              # SessionVectorStore (in-memory RRF fusion & document diversity)
-│   │   └── models.py             # SearchResult, SearchQuery models
-│   ├── extraction/               # Information extraction & verification subsystem
-│   │   ├── service.py            # ExtractionService (retrieval query builder & orchestrator)
-│   │   ├── verifier.py           # ConfidenceCalculator (type checking & evidence alignment)
-│   │   └── schemas.py            # ExtractionItemQuery, ExtractionResponse, ExtractionItemResult
-│   └── llm/                      # In-process LLM inference engine
-│       ├── local_engine.py       # LocalLLMEngine (Gemma-4 GGUF + mmproj multimodal chat engine)
-│       └── client.py             # LLMClient abstract base interface
-└── tests/                        # Comprehensive Pytest test suite
-    ├── test_clean_modules.py     # Fast unit tests for pure helper functions
-    ├── test_cuda_compat.py       # CUDA library preloader and decorator tests
-    ├── test_extraction.py        # Extraction query synthesis and verifier unit tests
-    ├── test_health.py            # Diagnostic endpoints & free-threaded status tests
-    ├── test_ingest.py            # Docling parser and chunking tests
-    ├── test_jobs.py              # Asynchronous job manager and SSE event stream tests
-    ├── test_multimodal_extraction.py # Multimodal vision extraction tests
-    ├── test_retrieval.py         # SessionVectorStore, BM25, and RRF fusion tests
-    ├── test_speculative.py       # Speculative decoding prompt lookup unit tests
-    └── test_ui_schema_sync.py    # UI schema mapping verification tests
+│   ├── main.py                   # FastAPI factory, CORS, /healthz
+│   ├── config.py                 # Pydantic BaseSettings (TOML + env)
+│   ├── cuda_compat.py            # ZeroGPU preloaders & memory leasing wrappers
+│   ├── api/                      # routes_extract.py, routes_jobs.py, validation.py ($ref, size checks)
+│   ├── jobs/                     # models.py, manager.py (in-memory registry, SSE queues, TTL)
+│   ├── ingest/                   # parser.py, chunker.py, acroform.py, cache.py, service.py, models.py
+│   ├── retrieval/                # embedder.py, docneedle_embed.cpp, libdocneedle_embed.so,
+│   │                             # worker.py (process-isolated embedder), bm25.py, reranker.py,
+│   │                             # store.py (SessionVectorStore, RRF), models.py
+│   ├── extraction/               # service.py, verifier.py, matcher.py, collision.py, schemas.py
+│   └── llm/                      # local_engine.py, client.py, handlers.py, parsing.py,
+│                                 # prompts.py, speculative.py
+└── tests/                        # Pytest suite (see Testing)
 ```
-
----
 
 ### End-to-End Extraction Lifecycle
 
-When a request is submitted to DocNeedle (via API or UI), it passes through a 7-stage pipeline:
-
 ```mermaid
 flowchart TD
-    A["Uploaded Files & JSON Schema"] --> B["1. Document Ingestion (Docling + pypdfium2)"]
-    B --> C["2. Chunker (Text Chunks + High-Res Page Renderings)"]
-    C --> D["3. Ephemeral In-Memory Indexing (SessionVectorStore)"]
-    D --> E["4. Hybrid Retrieval (EmbeddingGemma-2 Dense + BM25 Sparse fused via RRF)"]
-    E --> F["5. Optional Cross-Encoder Reranking (Qwen3-Reranker)"]
-    F --> G["6. Multimodal Extraction (Gemma-4 E2B-IT GGUF + mmproj)"]
-    G --> H["7. Confidence Verification & Grounding (ConfidenceCalculator)"]
-    H --> I["Structured JSON Output"]
-    I --> J["finally: store.clear() (RAM vectors purged)"]
+    A["Uploaded Files & Schema"] --> B["1. Ingestion: AcroForm Direct + Docling + pypdfium2"]
+    B --> C["2. Chunker: Semantic Text Chunks + High-Res Page Renderings"]
+    C --> D["3. Ephemeral In-Memory Indexing: SessionVectorStore"]
+    D --> E["4. Hybrid Retrieval: EmbeddingGemma-2 Dense + BM25 Sparse (RRF=60)"]
+    E --> F["5. Optional Cross-Encoder Reranking: Qwen3-Reranker"]
+    F --> G["6. Multimodal Extraction: Qwen3.5-4B GGUF + mmproj"]
+    G --> H["7. Spatial Collision Resolver & Confidence Verification"]
+    H --> I["Structured JSON Output with Provenance Citations"]
+    I --> J["finally: store.clear() (RAM purged)"]
 ```
 
-1. **Document Ingestion (`IngestionService` & `DoclingParser`):**
-   - The file format (PDF, DOCX, XLSX, image) is detected.
-   - For PDFs, `pypdfium2` checks whether digital text is present (`has_digital_text`).
-   - If digital text exists, Docling extracts document hierarchy, tables, headings, and markdown structures while preserving high-resolution page rendering in memory.
-   - If purely scanned or an image, pages are rendered as 150 DPI RGB images.
-2. **Chunking (`DoclingChunker`):**
-   - Documents are split into semantic chunks (maximum 768 tokens, bounded by sentence and paragraph boundaries).
-   - Table headers are repeated on split table rows to maintain context.
-   - Visual page images are attached to chunk objects (`image_bytes`).
-3. **In-Memory Session Store (`SessionVectorStore`):**
-   - Chunks are indexed into a temporary in-memory store.
-   - Text chunks receive dense semantic embeddings via EmbeddingGemma-2 (`title: {doc} | text: {content}`).
-   - Scanned visual chunks are embedded cross-modally via the SigLIP vision projector.
-   - A sparse Okapi BM25 index is generated in RAM simultaneously.
-4. **Hybrid Retrieval:**
-   - For each target schema item, a specialized retrieval query is formulated.
-   - Top-$K$ dense vector results and top-$K$ BM25 keyword results are fused using Reciprocal Rank Fusion ($RRF=60$).
-   - Document diversity constraints prevent a single document from starving others.
-5. **Reranking (Optional):**
-   - If `enable_reranker=True`, the top candidates are scored by Qwen3-Reranker using cross-encoder logit differences.
-6. **Multimodal LLM Inference (`LocalLLMEngine`):**
-   - The top supporting text snippets and visual page images are formatted into a multimodal chat turn.
-   - Gemma-4 multimodal IT evaluates the evidence and extracts the exact key value and supporting quote in JSON format.
-7. **Verification & Memory Purge:**
-   - The `ConfidenceCalculator` validates extracted values against the requested schema type (e.g., date formats, currency patterns, ID numbers).
-   - Provenance evidence (document name, page number, context snippet) is assembled.
-   - **Crucial:** In the `finally:` block, `store.clear()` purges all vectors and document chunks from memory.
+### OCR-Free Visual RAG & Digital Text Ingestion
 
----
+DocNeedle natively ingests PDFs, Office documents (`.docx`, `.xlsx`, `.xls`), web pages (`.html`, `.htm`), delimited text (`.csv`, `.tsv`, `.txt`, `.md`, `.json`, `.xml`), and image formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`, `.bmp`).
 
-### Data Flow
+1. **Digital documents:** With an embedded text layer (`pdf_embedded_text_min_chars = 50`), Docling extracts markdown, headings, and tables; rasterized pages are preserved alongside.
+2. **Scanned documents & images:** Pages are rasterized at 150 DPI and embedded cross-modally via SigLIP. The raw page image goes directly to the multimodal LLM, which improves fidelity on handwriting, stamps, receipts, and low-contrast scans.
 
-```
-Client Request (Files + Schema)
-       │
-       ▼
-FastAPI Router / Gradio Handler
-       │
-       ├──► IngestionService ────► Docling & pypdfium2 (high-res rendering)
-       │
-       ├──► SessionVectorStore ──► Dense EmbeddingGemma-2 (Cross-Modal) + BM25 Engine
-       │                                     │
-       │                                     ▼
-       │                              Hybrid RRF Fusion
-       │                                     │
-       ├──► ExtractionService ───► LocalLLMEngine (Gemma-4 Multimodal GGUF)
-       │                                     │
-       │                                     ▼
-       ├──► ConfidenceCalculator ─► Type check & evidence snippet alignment
-       │
-       ▼
-JSON Response ──► finally: store.clear() (RAM purged)
-```
+### Interactive PDF AcroForm Extraction
 
----
+`src/docneedle/ingest/acroform.py` inspects form fields via `pypdfium2.raw` (`FPDFPage_GetAnnot`, `FPDFAnnot_GetFormFieldType`), reads names, alternate descriptions, and values from UTF-16LE form streams, formats them as markdown tables, and injects them into the chunks before retrieval, giving deterministic accuracy on interactive forms.
+
+### Spatial Collision Resolution
+
+LLMs may repeat one salient number or entity across several unpopulated fields. `SpatialCollisionResolver` (`extraction/collision.py`):
+
+1. Detects duplicate non-trivial values across distinct schema items.
+2. Counts occurrences of the value on candidate pages.
+3. If the value occurs only once, scores context affinity between each field description and the text around the value.
+4. Assigns the value to the highest-affinity field and resets the others to `found: False, value: None`.
+
+### Native C++ Cross-Modal Embedding Engine
+
+`src/docneedle/retrieval/docneedle_embed.cpp` is compiled to `libdocneedle_embed.so` and loaded via `ctypes`. It embeds text (`instruction: "task: search result | query: {text}"`) and raw image bytes into one 768-dimensional L2-normalized space. Precompiled multi-architecture CUDA kernels embedded directly in `libggml-cuda.so` (supporting `sm_80`, `sm_86`, `sm_89`, and `sm_120a`) ensure immediate startup on modern NVIDIA GPUs without runtime compilation.
 
 ### Zero-Disk Privacy Guarantee
 
-DocNeedle guarantees that your documents never touch persistent storage or external cloud services:
-
-1. **Zero External Telemetry:** All embeddings and LLM inference run strictly in-process. No cloud endpoints (OpenAI, Anthropic, Google Cloud) are ever called.
-2. **Volatile In-Memory Indices:** Embeddings and chunk graphs live exclusively in RAM within `SessionVectorStore`.
-3. **Strict Ephemeral Cleanup:** Vector stores are flushed unconditionally inside `finally:` blocks:
+1. **No external telemetry:** Embeddings and inference run in-process; no cloud endpoint is contacted.
+2. **Volatile indices:** Embeddings and chunk graphs exist only in RAM within `SessionVectorStore`.
+3. **Ephemeral cleanup:**
    ```python
    store = SessionVectorStore()
    try:
        store.add_chunks(chunks)
-       # ... perform retrieval & extraction ...
+       # ... retrieval & extraction ...
        return response
    finally:
-       store.clear()  # Overwrites and deallocates chunk buffers immediately
+       store.clear()  # deallocates chunk buffers immediately
    ```
-4. **Temporary Upload Isolation:** Any temporary OS file handles required during parser streaming are immediately unlinked (`temp_path.unlink()`) in `finally:` blocks.
-5. **Async Job TTL Eviction:** In asynchronous mode (`POST /v1/jobs`), extracted answers cached in RAM expire and are evicted after `job_retention_minutes` (default 15 minutes).
+4. **Temporary uploads:** OS temp files from parser streaming are unlinked (`temp_path.unlink()`) in `finally:` blocks.
+5. **Async job TTL:** Cached job results expire after `job_retention_minutes` (default 15).
+
+### Supported Data Types & Validation Rules
+
+| Type Key | Description | Example | Validation Rule |
+| :--- | :--- | :--- | :--- |
+| `string` | Free text | Any phrase or sentence | Trimmed string |
+| `number` | Numeric quantity | `42`, `3.14`, `1,250` | Strips commas/spaces, verifies numeric |
+| `money` | Amount with currency | `25.000 TL`, `$4,500.00`, `€120` | Amount + currency symbol/code |
+| `date` | ISO or localized date | `2024-10-15`, `15/10/2024` | Format & calendar sanity |
+| `time` | Clock time or duration | `14:30`, `09:00 AM`, `45 mins` | 12h/24h patterns |
+| `email` | Email address | `contact@docneedle.org` | RFC 5322 regex |
+| `phone` | Phone number | `+90 555 123 4567` | Digit count & country codes |
+| `id` | Identification number | National ID, passport, plate | Alphanumeric identifier |
+| `iban` | Bank account number | `TR33 0006 1005 1234 5678 9012 34` | Format & checksum |
+| `percentage` | Percentage | `18%`, `2.5 %` | Extracts number before `%` |
+| `person` | Human name | `Tolga Arslan`, `Dr. Jane Doe` | Capitalized name syntax |
+| `organization` | Company or entity | `Acme Corp` | Entity keywords & casing |
+| `address` | Street address | `Ataturk Cad. No: 12 Kadikoy/Istanbul` | Filters header timestamps |
+| `boolean` | Binary condition | `true`, `false`, `yes`, `no` | Normalized to `True`/`False` |
+| `list` / `array` | Delimited items | `Apple; Banana; Orange` | Split into typed items |
+
+### Recursive JSON Schema Dereferencing (`$ref`)
+
+`src/docneedle/api/validation.py` dereferences internal pointers (`#/definitions/Item`, `#/$defs/Item`) up to 20 levels deep and accepts both flat item arrays (`[{"key": "total", "type": "money", ...}]`) and nested JSON Schema objects.
 
 ---
 
-### Supported Data Types
+## Web Dashboard (Gradio 6 UI)
 
-DocNeedle supports typed schema validation for the following entity types:
+Served at `http://localhost:7860`, matching the REST API:
 
-| Type Key | Description | Example Target |
-| :--- | :--- | :--- |
-| `string` | Unstructured text string | Any phrase, title, or sentence |
-| `number` | Numerical quantity or float | `42`, `3.14`, `1,250` |
-| `money` | Financial monetary amount with currency | `25.000 TL`, `$4,500.00`, `€120` |
-| `date` | Calendar dates (ISO or localized) | `2024-10-15`, `15/10/2024`, `October 15, 2024` |
-| `time` | Clock time or duration | `14:30`, `09:00 AM`, `45 mins` |
-| `email` | Standard RFC email address | `contact@docneedle.org` |
-| `phone` | International or local phone numbers | `+90 555 123 4567`, `(555) 123-4567` |
-| `id` | Identification or registration number | National ID, passport number, license plate |
-| `iban` | International Bank Account Number | `TR33 0006 1005 1234 5678 9012 34` |
-| `percentage`| Numerical percentage values | `18%`, `2.5 %`, `0.75%` |
-| `person` | Individual human name | `Tolga Arslan`, `Dr. Jane Doe` |
-| `organization`| Legal entity or company name | `Acme Corp`, `Ministry of Finance` |
-| `address` | Physical location or street address | `Ataturk Cad. No: 12 Kat: 4 Kadikoy/Istanbul` |
-| `boolean` | Binary boolean condition | `true`, `false`, `yes`, `no` |
-| `list` | Semicolon or comma-separated item list | `Apple; Banana; Orange` |
+- **Schema Builder:** Add, edit, or remove fields visually with type dropdowns.
+- **Raw JSON Schema Tab:** Bidirectional sync with the visual builder.
+- **Multi-Document Upload:** PDFs, Word, Excel, and images via drag & drop.
+- **Live Progress:** SSE-driven progress bar with current step, field key, and percentage.
+- **Dual Output:** Formatted cards (confidence badges, values, highlighted citations) and raw JSON matching the `/v1/extract` contract.
 
 ---
 
 ## API Reference
 
-### Endpoints Overview
-
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/` | Microservice info, docs links, and version |
-| `GET` | `/healthz` | System diagnostics, Python GIL status, GPU/CUDA detection, and active configuration |
-| `GET` | `/health` | Health check alias |
-| `POST`| `/v1/extract` | **Synchronous extraction**: Ingests files, runs extraction, returns complete JSON |
-| `POST`| `/v1/jobs` | **Asynchronous extraction**: Ingests files, returns `202 Accepted` with job tracking URLs |
-| `GET` | `/v1/jobs/{job_id}` | Poll real-time progress and results of an extraction job |
-| `GET` | `/v1/jobs/{job_id}/events` | **SSE Stream**: Server-Sent Events real-time event stream for job progress |
-| `GET` | `/docs` | Interactive Swagger OpenAPI documentation |
-| `GET` | `/redoc` | Interactive ReDoc API documentation |
+| `GET` | `/` | Service info, docs links, version |
+| `GET` | `/healthz`, `/health` | Diagnostics (GIL status, GPU/CUDA, models, config); `/health` is an alias |
+| `POST` | `/v1/extract` | **Synchronous** extraction, returns complete JSON |
+| `POST` | `/v1/jobs` | **Asynchronous** extraction, returns `202 Accepted` with tracking URLs |
+| `GET` | `/v1/jobs/{job_id}` | Poll job progress and results |
+| `GET` | `/v1/jobs/{job_id}/events` | **SSE** real-time job events |
+| `GET` | `/docs`, `/redoc` | Swagger / ReDoc documentation |
 
----
+### 1. Synchronous Extraction (`POST /v1/extract`)
 
-### Synchronous Extraction (`POST /v1/extract`)
-
-Processes documents and returns structured answers in a single HTTP request.
-
-#### Request Parameters (Multipart Form-Data)
+Multipart form-data parameters:
 
 | Parameter | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
-| `files` | `binary[]` | Yes | One or more document files (PDF, DOCX, XLSX, PNG, JPG, WEBP) |
-| `schema` | `string` | Yes | JSON string array specifying target keys, descriptions, and types |
-| `enable_reranker` | `boolean` | No | Overrides Qwen3 reranking (`true`/`false`). Defaults to `config.toml` |
-
-#### Example Request
+| `files` | `binary[]` | Yes | One or more files (PDF, DOCX, XLSX, HTML, CSV, TXT, MD, PNG, JPG, WEBP, TIFF) |
+| `schema` | `string` | Yes | JSON array of target keys, descriptions, and types |
+| `enable_reranker` | `boolean` | No | Overrides reranking; defaults to `config.toml` |
 
 ```bash
 curl -X POST "http://localhost:7860/v1/extract" \
   -F "files=@contract.pdf" \
   -F 'schema=[
-    {
-      "key": "monthly_rent",
-      "description": "Agreed monthly rent amount",
-      "type": "money"
-    },
-    {
-      "key": "tenant_name",
-      "description": "Full legal name of the tenant",
-      "type": "person"
-    },
-    {
-      "key": "commencement_date",
-      "description": "Contract start date",
-      "type": "date"
-    }
+    {"key": "monthly_rent", "description": "Agreed monthly rent amount", "type": "money"},
+    {"key": "tenant_name", "description": "Full legal name of the tenant", "type": "person"}
   ]'
 ```
 
-#### Example Response (`200 OK`)
+Python (`httpx`):
+
+```python
+import httpx, json
+
+schema = [
+    {"key": "monthly_rent", "description": "Agreed monthly rent amount", "type": "money"},
+    {"key": "tenant_name", "description": "Full legal name of the tenant", "type": "person"},
+]
+files = [("files", ("contract.pdf", open("contract.pdf", "rb"), "application/pdf"))]
+data = {"schema": json.dumps(schema), "enable_reranker": "false"}
+
+with httpx.Client(timeout=120.0) as client:
+    response = client.post("http://localhost:7860/v1/extract", files=files, data=data)
+    print(json.dumps(response.json(), indent=2))
+```
+
+Response (`200 OK`):
 
 ```json
 {
   "status": "completed",
-  "processing_time_ms": 1140.5,
-  "total_items": 3,
-  "found_items": 3,
+  "processing_time_ms": 910.5,
+  "total_items": 2,
+  "found_items": 2,
   "results": [
     {
-      "key": "monthly_rent",
-      "found": true,
-      "value": "25.000 TL",
-      "confidence": 0.96,
-      "evidence": {
-        "document": "contract.pdf",
-        "page": 1,
-        "snippet": "Kira Bedeli: Aylık 25.000 TL olup her ayın 5. gününe kadar ev sahibinin hesabına ödenecektir."
-      },
+      "key": "monthly_rent", "found": true, "value": "25.000 TL", "confidence": 0.96,
+      "evidence": {"document": "contract.pdf", "page": 1,
+                   "snippet": "Kira Bedeli: Aylık 25.000 TL olup her ayın 5. gününe kadar ödenecektir."},
       "thinking": null
     },
     {
-      "key": "tenant_name",
-      "found": true,
-      "value": "Tolga Arslan",
-      "confidence": 0.95,
-      "evidence": {
-        "document": "contract.pdf",
-        "page": 1,
-        "snippet": "KİRACI: Tolga Arslan (T.C. Kimlik No: 12345678901)"
-      },
-      "thinking": null
-    },
-    {
-      "key": "commencement_date",
-      "found": true,
-      "value": "01.11.2024",
-      "confidence": 0.94,
-      "evidence": {
-        "document": "contract.pdf",
-        "page": 2,
-        "snippet": "İşbu sözleşme 01.11.2024 tarihinde taraflarca imza altına alınmıştır."
-      },
+      "key": "tenant_name", "found": true, "value": "Tolga Arslan", "confidence": 0.95,
+      "evidence": {"document": "contract.pdf", "page": 1,
+                   "snippet": "KİRACI: Tolga Arslan (T.C. Kimlik No: 12345678901)"},
       "thinking": null
     }
   ]
 }
 ```
 
----
+### 2. Asynchronous Job Creation (`POST /v1/jobs`)
 
-### Asynchronous Job Creation (`POST /v1/jobs`)
-
-For larger documents or background batch workflows, submit an asynchronous job. Returns `202 Accepted` immediately with status and event streaming URLs.
-
-#### Example Request
+For large documents or batch workflows. Returns `202 Accepted` immediately with polling and SSE URLs.
 
 ```bash
 curl -X POST "http://localhost:7860/v1/jobs" \
@@ -580,8 +461,6 @@ curl -X POST "http://localhost:7860/v1/jobs" \
     {"key": "net_profit", "description": "Net annual operating profit", "type": "money"}
   ]'
 ```
-
-#### Example Response (`202 Accepted`)
 
 ```json
 {
@@ -593,113 +472,84 @@ curl -X POST "http://localhost:7860/v1/jobs" \
 }
 ```
 
----
-
-### Job Status Polling (`GET /v1/jobs/{job_id}`)
-
-Poll the real-time execution status and inspect partial or completed results.
+### 3. Job Status Polling (`GET /v1/jobs/{job_id}`)
 
 ```bash
 curl -X GET "http://localhost:7860/v1/jobs/job_01jcb7x4e8rfb9q2"
 ```
 
-#### Response (`200 OK`)
-
 ```json
 {
   "job_id": "job_01jcb7x4e8rfb9q2",
   "status": "extracting",
-  "progress": {
-    "current_step": "Extracting: total_revenue",
-    "total_items": 2,
-    "completed_items": 1,
-    "current_key": "total_revenue",
-    "percent": 50.0
-  },
+  "progress": {"current_step": "Extracting: total_revenue", "total_items": 2,
+               "completed_items": 1, "current_key": "total_revenue", "percent": 50.0},
   "created_at": 1730390400.125,
   "completed_at": null,
   "processing_time_ms": null,
   "results": [
-    {
-      "key": "net_profit",
-      "found": true,
-      "value": "$12.4M",
-      "confidence": 0.95,
-      "evidence": {
-        "document": "annual_report.pdf",
-        "page": 4,
-        "snippet": "Net profit for the fiscal year reached $12.4M."
-      },
-      "thinking": null
-    }
+    {"key": "net_profit", "found": true, "value": "$12.4M", "confidence": 0.95,
+     "evidence": {"document": "annual_report.pdf", "page": 4,
+                  "snippet": "Net profit for the fiscal year reached $12.4M."},
+     "thinking": null}
   ],
   "response": null,
   "error": null
 }
 ```
 
----
-
-### Real-Time SSE Streaming (`GET /v1/jobs/{job_id}/events`)
-
-Stream live progress updates and field extractions as they happen using Server-Sent Events (SSE):
+### 4. Real-Time SSE Streaming (`GET /v1/jobs/{job_id}/events`)
 
 ```bash
 curl -N "http://localhost:7860/v1/jobs/job_01jcb7x4e8rfb9q2/events"
 ```
 
-#### Sample Stream Output
-
 ```
-event: progress
-data: {"percent": 15.0, "step": "Parsing: annual_report.pdf (1240.2 KB)...", "current_key": null}
+event: status
+data: {"status": "pending", "progress": {"current_step": "Queued in memory", "total_items": 2, "completed_items": 0, "current_key": null, "percent": 0.0}, "results": []}
 
 event: progress
-data: {"percent": 40.0, "step": "Indexing 18 chunks into RAM vector store...", "current_key": null}
+data: {"status": "parsing", "progress": {"current_step": "Parsing: annual_report.pdf (1240.2 KB)...", "total_items": 2, "completed_items": 0, "current_key": null, "percent": 15.0}}
+
+event: progress
+data: {"status": "extracting", "progress": {"current_step": "Extracting: total_revenue", "total_items": 2, "completed_items": 1, "current_key": "total_revenue", "percent": 60.0}}
 
 event: item_extracted
-data: {"key": "total_revenue", "found": true, "value": "$84.2M", "confidence": 0.96}
+data: {"key": "total_revenue", "found": true, "value": "$84.2M", "confidence": 0.96, "evidence": {"document": "annual_report.pdf", "page": 4, "snippet": "Consolidated total revenue reached $84.2M."}, "thinking": null}
 
 event: completed
-data: {"status": "completed", "total_items": 2, "found_items": 2, "processing_time_ms": 2840.0}
+data: {"status": "completed", "processing_time_ms": 2840.0, "total_items": 2, "found_items": 2, "results": [{"key": "total_revenue", "found": true, "value": "$84.2M", "confidence": 0.96, "evidence": {"document": "annual_report.pdf", "page": 4, "snippet": "Consolidated total revenue reached $84.2M."}, "thinking": null}]}
 ```
 
----
+Python consumer:
 
-### Health & Diagnostics (`GET /healthz`)
+```python
+import httpx, json
 
-Returns diagnostic metadata regarding the active Python interpreter, GIL state, CUDA/GPU hardware, and neural model configurations:
-
-```bash
-curl -X GET "http://localhost:7860/healthz"
+events_url = "http://localhost:7860/v1/jobs/job_01jcb7x4e8rfb9q2/events"
+with httpx.Client(timeout=None) as client:
+    with client.stream("GET", events_url) as stream:
+        for line in stream.iter_lines():
+            if line.startswith("data: "):
+                print("Received SSE:", json.loads(line[6:]))
 ```
 
-#### Sample Response
+### 5. Health & Hardware Diagnostics (`GET /healthz`)
+
+Returns interpreter, GIL state, CUDA/GPU hardware, model readiness, job counts, and active configuration:
 
 ```json
 {
   "status": "healthy",
   "service": "DocNeedle",
   "version": "0.1.0",
-  "python_version": "3.14.4 experimental free-threading build (tags/v3.14.4:...) [GCC 11.4.0]",
+  "uptime_seconds": 1284.5,
   "free_threaded": true,
   "gil_enabled": false,
-  "hardware": {
-    "torch_cuda": true,
-    "cuda_visible_devices": "0",
-    "spaces_zero_gpu": null
-  },
-  "config": {
-    "embedding_model": "unsloth/embeddinggemma-2-GGUF",
-    "embedding_quantization": "ud-q4_k_xl",
-    "llm_model": "gemma-4-E2B-it-qat-UD-Q4_K_XL",
-    "llm_speculative_enabled": true,
-    "multimodal_embedding": true,
-    "multimodal_llm": true,
-    "reranker_enabled": false,
-    "gpu_enabled": true,
-    "cpu_threads": 8
-  }
+  "hardware": {"device": "cuda", "gpu_enabled": true, "torch_cuda": true},
+  "models": {"all_ready": true, "llm": {"ready": true}, "embedding": {"ready": true}, "reranker": {"ready": true}},
+  "jobs": {"active_jobs": 0, "total_cached_jobs": 2},
+  "config": {"llm_model": "Qwen3.5-4B-Q4_K_M", "embedding_model": "unsloth/embeddinggemma-2-GGUF", "gpu_enabled": true}
 }
 ```
 
@@ -707,7 +557,7 @@ curl -X GET "http://localhost:7860/healthz"
 
 ## Configuration Reference
 
-DocNeedle uses a hierarchical configuration system. Settings are loaded from `config.toml`, then optionally overridden by `.env` files or OS environment variables.
+Settings load from `config.toml` and can be overridden by `.env` files or OS environment variables.
 
 ### Configuration File (`config.toml`)
 
@@ -718,35 +568,44 @@ app_version = "0.1.0"
 debug = false
 host = "0.0.0.0"
 port = 8000
-cors_origins = ["*"]
+cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://docneedle.vercel.app",
+    "*"
+]
 
 [hardware]
-gpu_enabled = true             # Enable CUDA GPU offload (auto-detected on ZeroGPU)
-llm_n_gpu_layers = -1          # -1 offloads all layers to GPU; 0 forces CPU
-model_n_batch = 512            # Batch size for prompt evaluation
-reranker_n_ctx = 2048          # Context window for cross-encoder reranker
-model_kv_cache_type_k = 8      # 8 = GGML_TYPE_Q8_0 (8-bit quantized KV cache)
-model_kv_cache_type_v = 8      # 8 = GGML_TYPE_Q8_0 (8-bit quantized KV cache)
-model_flash_attn = true        # Flash Attention (enables quantized KV cache in llama.cpp)
+gpu_enabled = true             # CUDA GPU offload (auto-detected on ZeroGPU)
+llm_n_gpu_layers = -1          # -1 = all layers on GPU; 0 = CPU
+model_n_batch = 256            # Logical batch size for prompt evaluation
+model_n_ubatch = 256           # Physical micro-batch size for GPU kernels
+reranker_n_ctx = 2048          # Reranker context window
+model_kv_cache_type_k = 1      # 1 = GGML_TYPE_F16 (stable FP16 KV cache)
+model_kv_cache_type_v = 1
+model_flash_attn = true        # Flash Attention
 
 [ingest]
-pdf_render_scale = 1.5         # 150 DPI page rendering scale for visual chunks
-pdf_embedded_text_min_chars = 50 # Minimum text length before treating PDF as digital
+max_upload_size_mb = 100
+pdf_render_scale = 1.5         # 150 DPI page rendering for visual chunks
+pdf_embedded_text_min_chars = 50 # Minimum text length to treat a PDF as digital
 pdf_embedded_text_max_check_pages = 5
 ingestion_cache_enabled = true
 
 [chunker]
 tokenizer_model = "Qwen/Qwen3-Reranker-0.6B"
 max_tokens = 768
-repeat_table_header = true     # Repeat markdown headers across table chunks
+repeat_table_header = true     # Repeat headers across table chunks
 merge_peers = true
-max_chunk_chars = 2500
+max_chunk_chars = 4000
 min_split_chars = 200
 overflow_factor = 1.25
 
 [bm25]
-k1 = 1.5                       # Okapi BM25 term frequency saturation
-b = 0.75                       # Okapi BM25 document length normalization
+k1 = 1.5                       # Term frequency saturation
+b = 0.75                       # Length normalization
 top_k = 10
 
 [embedding]
@@ -758,31 +617,36 @@ instruction = "task: search result | query: {text}"
 doc_instruction = "title: {doc_name} | text: {text}"
 
 [retrieval]
-top_k = 10                     # Candidates returned from RRF hybrid search
-rrf_constant = 60              # Reciprocal Rank Fusion constant
-reranker_enabled = false       # Enable Qwen3 cross-encoder (disabled by default on CPU)
+top_k = 10                     # Candidates from RRF hybrid search
+rrf_constant = 60
+reranker_enabled = false       # Qwen3 cross-encoder (off by default on CPU)
 reranker_model = "Qwen/Qwen3-Reranker-0.6B"
 reranker_candidate_k = 4
 rerank_top_k = 3
-max_chunks_per_document = 2    # Prevent single document dominance
+max_chunks_per_document = 2    # Prevent single-document dominance
+reranker_instruction = "Given a web search query, retrieve relevant passages that answer the query"
 
 [llm]
-model_name = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
-mmproj_name = "mmproj-F16"
-n_ctx = 16384                  # 16k context window
-temperature = 0.0              # Strict greedy decoding for deterministic extraction
+model_name = "Qwen3.5-4B-Q4_K_M"
+mmproj_name = "mmproj-Qwen3.5-4B-F16"
+n_ctx = 32768                  # 32k context window
+temperature = 0.0              # Greedy decoding for deterministic extraction
 top_p = 0.95
-max_tokens = 2048
+max_tokens = 4096
 single_field_max_tokens = 128
 thinking_max_tokens = 512
 enable_thinking = false
-speculative_enabled = true     # Speculative prompt lookup decoding
+log_extraction_payloads = false
+stop_tokens = ["<|im_end|>", "<|endoftext|>", "</s>"]
+speculative_enabled = false    # Prompt lookup decoding
 speculative_cpu_enabled = false
+speculative_max_vocab_size = 65536
 speculative_num_pred_tokens = 5
 speculative_max_ngram_size = 2
 
 [extraction]
 top_k = 5
+schema_batch_size = 35
 context_delimiter = "\n\n---\n\n"
 confidence_found_score = 0.95
 confidence_not_found_score = 0.0
@@ -790,265 +654,114 @@ job_retention_minutes = 15     # In-memory TTL for async job results
 model_storage_dir = "models"
 
 [security]
-max_schema_items = 50          # Limit target items per extraction request
-max_upload_files = 20          # Maximum documents per batch
-max_total_upload_size_mb = 100 # Maximum batch payload size
-max_concurrent_jobs = 10       # Max parallel background worker jobs
+max_schema_items = 50          # Target items per request
+max_upload_files = 20          # Documents per batch
+max_total_upload_size_mb = 100 # Batch payload limit
+max_concurrent_jobs = 10       # Parallel background jobs
 ```
 
 ### Environment Variables
 
-Any parameter in `config.toml` can be overridden by environment variables:
-
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `GPU_ENABLED` | Enable or disable CUDA GPU acceleration (`true`/`false`) | `true` |
-| `LLM_N_GPU_LAYERS` | Number of LLM layers offloaded to GPU (`-1` = all, `0` = CPU) | `-1` |
-| `MODEL_STORAGE_DIR` | Absolute or relative path to downloaded GGUF models | `models` |
-| `CONFIG_TOML` | Custom path to configuration TOML file | `config.toml` |
-| `RERANKER_ENABLED` | Enable cross-encoder reranker by default (`true`/`false`) | `false` |
-| `HOST` | Server bind network interface | `0.0.0.0` |
-| `PORT` | Server listening port | `7860` (app.py) / `8000` (uvicorn) |
-| `DEBUG` | Enable verbose debug logging | `false` |
-| `SPACES_ZERO_GPU` | Hugging Face Spaces ZeroGPU leasing flag (auto-set by HF) | `None` |
+| `GPU_ENABLED` | Enable CUDA acceleration (`true`/`false`) | `true` |
+| `LLM_N_GPU_LAYERS` | LLM layers offloaded to GPU (`-1` = all, `0` = CPU) | `-1` |
+| `MODEL_STORAGE_DIR` | Path to downloaded GGUF models | `models` |
+| `CONFIG_TOML` | Custom configuration file path | `config.toml` |
+| `RERANKER_ENABLED` | Enable reranker by default | `false` |
+| `HOST` | Bind interface | `0.0.0.0` |
+| `PORT` | Listening port | `7860` (app.py) / `8000` (uvicorn) |
+| `DEBUG` | Verbose debug logging | `false` |
+| `SPACES_ZERO_GPU` | ZeroGPU leasing flag (auto-set by Hugging Face) | `None` |
 
 ---
 
-## Available Scripts & Commands
+## Available Scripts
 
 | Command | Description |
 | :--- | :--- |
-| `uv run python app.py` | Launch unified Gradio 6 UI and FastAPI API on port `7860` |
-| `uv run uvicorn docneedle.main:app --reload` | Run standalone API dev server with hot reload on port `8000` |
-| `uv run python scripts/download_models.py` | Download all quantized models and Hugging Face tokenizers (~4.5 GB) |
-| `uv run python scripts/download_models.py --embedding` | Download only EmbeddingGemma-2 & SigLIP vision projector |
-| `uv run python scripts/download_models.py --llm` | Download only Gemma-4 E2B-IT GGUF & vision projector |
-| `uv run python scripts/download_models.py --reranker` | Download only Qwen3-Reranker GGUF |
-| `uv run pytest` | Execute full automated test suite |
-| `uv run pytest tests/test_clean_modules.py` | Run ultra-fast unit tests for modular functions (no model load required) |
-| `uv run pytest tests/test_health.py` | Run FastAPI `/healthz` and route verification tests |
-| `uv run ruff check .` | Run Ruff linter across the entire repository |
-| `uv run ruff check . --fix` | Automatically fix auto-fixable lint issues |
-| `uv run ruff format .` | Format codebase using Ruff formatter (Python 3.14t profile) |
-| `bash scripts/deploy_space.sh [SPACE_ID]` | One-click deployment script to Hugging Face Spaces with ZeroGPU |
-| `docker compose up --build -d` | Build and run containerized DocNeedle stack |
+| `uv run python app.py` | Unified Gradio UI + FastAPI on port `7860` |
+| `uv run uvicorn docneedle.main:app --reload` | API-only dev server with hot reload (port `8000`) |
+| `uv run python scripts/download_models.py [--embedding\|--llm\|--reranker]` | Download all models (~4.5 GB) or a single group |
+| `uv run python scripts/benchmark_extractbench.py --split short` | Run the ExtractBench evaluation |
+| `uv run pytest` | Full automated test suite |
+| `uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py` | Fast unit tests (no model load) |
+| `uv run pytest tests/test_health.py` | `/healthz` and route tests |
+| `uv run ruff check . [--fix]` | Lint (optionally auto-fix) |
+| `uv run ruff format .` | Format code (Python 3.14t profile) |
+| `bash scripts/deploy_space.sh [SPACE_ID]` | Deploy to Hugging Face Spaces (ZeroGPU) |
 
 ---
 
 ## Testing
 
-### Running the Test Suite
-
-DocNeedle includes an asynchronous test suite powered by `pytest` and `pytest-asyncio`.
+DocNeedle uses `pytest` and `pytest-asyncio` (`asyncio_mode = "auto"`).
 
 ```bash
-# Run all lightweight unit tests
-uv run pytest tests/test_clean_modules.py tests/test_health.py tests/test_ui_schema_sync.py
+# Fast unit tests (<6 s, no model weights)
+uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py tests/test_health.py tests/test_ui_schema_sync.py
 
-# Run all tests in the repository
+# Full end-to-end suite (requires model weights)
 uv run pytest
 ```
 
-### Test Suite Organization
-
-```
-tests/
-├── test_clean_modules.py          # Fast unit tests: string sanitization, prompts, response parsing
-├── test_cuda_compat.py            # CUDA shared library preloading and ZeroGPU decorator mocks
-├── test_health.py                 # FastAPI endpoints: /, /healthz, /health, free-threaded checks
-├── test_ingest.py                 # Docling parsing, pypdfium2 text checks, chunk creation
-├── test_jobs.py                   # Asynchronous JobManager, state machines, TTL, and SSE queues
-├── test_multimodal_extraction.py  # Gemma-4 multimodal extraction with visual page chunks
-├── test_ocr_grounding.py          # Confidence calculation, fuzzy matching, and snippet alignment
-├── test_retrieval.py              # In-memory SessionVectorStore, BM25 indexing, and RRF fusion
-├── test_speculative.py            # Speculative decoding ngram inspection and token validation
-└── test_ui_schema_sync.py         # Gradio UI schema input synchronization with API models
-```
-
-### Important Note on Dev Server VRAM
-
 > [!WARNING]
-> When the Gradio dev server (`app.py`) is running, it retains ~7.1 GB of GPU VRAM for the multimodal LLM, vision projector, and embedder. Concurrently executing heavy end-to-end model test suites will cause a CUDA Out-of-Memory (OOM) error.
-> 
-> **Recommendation:** Run lightweight unit tests (`tests/test_clean_modules.py`, `tests/test_health.py`) while the server is active, or stop `app.py` before executing the full end-to-end model test suite.
+> While the dev server (`app.py`) runs, it holds ~7.1 GB of GPU VRAM. Running heavy end-to-end model tests concurrently causes CUDA OOM.
+>
+> **Recommendation:** Run lightweight unit tests while the server is active, or stop `app.py` before executing the full test suite.
 
 ---
 
 ## Production Deployment
 
-### Docker & Docker Compose
-
-DocNeedle provides a containerized setup based on `python:3.14-slim`.
-
-#### 1. Quick Start with Docker Compose
-
-Ensure model weights are downloaded into `./models` on the host, then start the container:
-
-```bash
-# 1. Download models locally on host
-uv run python scripts/download_models.py
-
-# 2. Build and launch container in detached mode
-docker compose up --build -d
-```
-
-Check container health:
-
-```bash
-docker compose ps
-docker compose logs -f docneedle
-```
-
-Access the service at [http://localhost:7860](http://localhost:7860).
-
-#### 2. Standalone Docker Run
-
-```bash
-# Build Docker image
-docker build -t docneedle:latest .
-
-# Run container mounting local models and config
-docker run -d \
-  --name docneedle \
-  -p 7860:7860 \
-  -v $(pwd)/models:/app/models \
-  -v $(pwd)/config.toml:/app/config.toml:ro \
-  --restart unless-stopped \
-  docneedle:latest
-```
-
----
-
 ### Hugging Face Spaces (ZeroGPU)
 
-DocNeedle is designed for instant deployment to **Hugging Face Spaces** on free or Pro **ZeroGPU** hardware (NVIDIA A100 / A10G dynamic slices).
-
-#### Deployment Script
-
-Use the automated deployment script `scripts/deploy_space.sh`:
+DocNeedle is designed for single-command deployment to Hugging Face **ZeroGPU** (NVIDIA A100 / A10G dynamic slices):
 
 ```bash
-# Ensure huggingface-cli / hf is logged in
 hf auth login
-
-# Deploy to your Space (e.g. username/docneedle)
 bash scripts/deploy_space.sh your-hf-username/docneedle
 ```
 
-The script automatically:
-1. Validates or creates a public ZeroGPU Gradio Space.
-2. Syncs code, static assets, and configurations while excluding local virtual environments and caches.
-3. Automatically triggers model bootstrapping upon Space cold start.
-4. Monitors build progress until the Space reaches `RUNNING` status.
-
----
-
-### Bare-Metal / Systemd Service
-
-To run DocNeedle as a persistent system service on Linux:
-
-1. Create a service file at `/etc/systemd/system/docneedle.service`:
-
-```ini
-[Unit]
-Description=DocNeedle Privacy-First Document Extraction Microservice
-After=network.target
-
-[Service]
-Type=simple
-User=www-data
-WorkingDirectory=/opt/DocNeedle
-Environment="PATH=/opt/DocNeedle/.venv/bin:/usr/local/cuda/bin:/usr/bin"
-Environment="PYTHONUNBUFFERED=1"
-Environment="PYTHON_GIL=0"
-Environment="GPU_ENABLED=true"
-Environment="PORT=7860"
-ExecStart=/opt/DocNeedle/.venv/bin/python app.py
-Restart=always
-RestartSec=5
-LimitNOFILE=65536
-
-[Install]
-WantedBy=multi-user.target
-```
-
-2. Enable and start the service:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable docneedle
-sudo systemctl start docneedle
-sudo systemctl status docneedle
-```
+The script automatically executes the following:
+1. Validates or provisions a public ZeroGPU Gradio Space (`--flavor zero-a10g`).
+2. Synchronizes application source code, configuration, and assets (excluding local environments and caches).
+3. Triggers automated quantized model bootstrap on container cold-start.
+4. Monitors build and deployment status until the Space reaches `RUNNING`.
 
 ---
 
 ## Troubleshooting & FAQs
 
-### 1. `libGL.so.1: cannot open shared object file: No such file or directory`
-**Cause:** Missing OpenGL runtime required by OpenCV/Pillow image rendering in headless Linux environments.  
-**Solution:** Install `libgl1` and `libglib2.0-0`:
-```bash
-sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
-```
-
-### 2. `FileNotFoundError: Missing required model: ...`
-**Cause:** Quantized GGUF weights have not been downloaded or `MODEL_STORAGE_DIR` points to an incorrect directory.  
-**Solution:** Run the downloader script:
-```bash
-uv run python scripts/download_models.py
-```
-Or check where your models reside and set:
-```bash
-export MODEL_STORAGE_DIR=/path/to/models
-```
-
-### 3. CUDA Out of Memory (CUDA OOM)
-**Cause:** Context size or concurrent layer offloading exceeds available VRAM.  
-**Solution:**
-- In `config.toml`, adjust `llm_n_gpu_layers` to offload fewer layers (e.g. `16` or `20` instead of `-1`).
-- Verify `model_kv_cache_type_k = 8` and `model_kv_cache_type_v = 8` are enabled (default in DocNeedle).
-- Disable the reranker on GPU (`reranker_enabled = false`).
-
-### 4. `Address already in use` (Port 7860 / 8000)
-**Cause:** Another instance of DocNeedle or Gradio is already running on the port.  
-**Solution:** Find and terminate the process holding the port:
-```bash
-lsof -i :7860
-kill -9 <PID>
-```
-Or run DocNeedle on an alternate port:
-```bash
-PORT=7861 uv run python app.py
-```
-
-### 5. `ModuleNotFoundError: No module named 'docneedle'`
-**Cause:** The package was not installed in editable/standard mode or `PYTHONPATH` does not include `src`.  
-**Solution:** Install the local package into your virtual environment:
-```bash
-uv pip install -e .
-```
+| Symptom | Cause | Solution |
+| :--- | :--- | :--- |
+| `libGL.so.1: cannot open shared object file` | Missing OpenGL runtime in headless Linux | `sudo apt-get install -y libgl1 libglib2.0-0` |
+| `FileNotFoundError: Missing required model: ...` | Weights not downloaded or wrong `MODEL_STORAGE_DIR` | `uv run python scripts/download_models.py`, or `export MODEL_STORAGE_DIR=/path/to/models` |
+| CUDA Out of Memory | Context size or layer offload exceeds VRAM | Lower `llm_n_gpu_layers` (e.g. `16`–`20`); keep `model_kv_cache_type_k/v = 1`; set `reranker_enabled = false` |
+| `Address already in use` (7860 / 8000) | Port held by another instance | `lsof -i :7860` then `kill -9 <PID>`, or `PORT=7861 uv run python app.py` |
+| `libdocneedle_embed.so: cannot open shared object file` | Native library missing from `src/docneedle/retrieval/` | Verify the file exists; to rebuild: `cd src/docneedle/retrieval && g++ -O3 -shared -fPIC -std=c++17 docneedle_embed.cpp -o libdocneedle_embed.so -I../../../.venv/lib/python3.14/site-packages/include -L. -Wl,-rpath,'$ORIGIN' -lllama -lggml_llamacpp -lggml-base -lggml-cpu -lmtmd` |
+| `ModuleNotFoundError: No module named 'docneedle'` | Package not installed or `src` not on `PYTHONPATH` | `uv pip install -e .` |
 
 ---
 
 ## Contributing
 
-Contributions to DocNeedle are welcome! Please adhere to the project standards:
+Contributions are welcome. Please follow these standards:
 
-1. **Fork and Branch:** Create a feature branch (`git checkout -b feature/my-feature`).
-2. **Strict No-Fallback Policy:** Maintain explicit fail-fast behavior. Do not introduce silent fallbacks or mock degradations.
-3. **Privacy First:** Ensure any new feature preserves the zero-disk persistence guarantee.
-4. **Code Style & Quality:**
+1. **Fork and branch:** `git checkout -b feature/my-feature`.
+2. **Strict no-fallback policy:** Maintain fail-fast behavior; do not introduce silent fallbacks, mock degradations, or fallback models.
+3. **Privacy first:** Preserve the zero-disk persistence guarantee.
+4. **Code quality:**
    ```bash
    uv run ruff check .
    uv run ruff format .
-   uv run pytest tests/test_clean_modules.py
+   uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py
    ```
-5. **Pull Request:** Open a detailed Pull Request describing the motivation, implementation details, and verification steps.
+5. **Pull request:** Describe motivation, implementation details, and verification steps.
 
 ---
 
 ## License
 
-DocNeedle is released under the **[Apache License 2.0](LICENSE)**.
-You are free to use, modify, and distribute this software in commercial and non-commercial projects according to the terms of the Apache 2.0 license.
+DocNeedle is released under the **[Apache License 2.0](LICENSE)**.  
+You may use, modify, and distribute this software in commercial and non-commercial projects under the terms of the Apache 2.0 license.

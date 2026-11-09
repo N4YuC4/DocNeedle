@@ -60,7 +60,7 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
             from docneedle.cuda_compat import preload_cuda_runtime_libs
 
             preload_cuda_runtime_libs()
-        self.n_ctx = max(2048, settings.chunker_max_tokens + 256)
+        self.n_ctx = max(4096, settings.chunker_max_tokens + 256)
 
         logger.info(
             "Loading EmbeddingGemma-2 engine: model=%s, mmproj=%s, dim=%d, gpu_layers=%d",
@@ -155,6 +155,9 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
                 continue
             doc_name = doc_names[i] if doc_names and i < len(doc_names) else None
             prompt = self._format_prompt(text, is_query=is_query, doc_name=doc_name)
+            # Bound prompt string to 16k chars to prevent runaway tokenization in native C++
+            if len(prompt) > 16384:
+                prompt = prompt[:16384]
             out_buf = (ctypes.c_float * self.dimension)()
             with self._lock:
                 status = self._lib.docneedle_embed_text(

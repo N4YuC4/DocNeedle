@@ -88,5 +88,8 @@ models/
 tmp/
 temp/
 
+# --- Benchmark Outputs (Keep summaries, ignore heavy raw prediction logs) ---
+benchmark_results/*.jsonl
+
 # --- Others ---
 AGENTS.md

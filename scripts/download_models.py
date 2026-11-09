@@ -1,8 +1,8 @@
 """Script to download quantized models for DocNeedle.
 
-- Embedding: mradermacher/harrier-oss-v1-0.6b-GGUF (harrier-oss-v1-0.6b.Q4_K_M.gguf)
+- Embedding: unsloth/embeddinggemma-2-GGUF (embeddinggemma-2-UD-Q4_K_XL.gguf + mmproj-F16.gguf)
 - Reranker: mradermacher/Qwen3-Reranker-0.6B-GGUF (Qwen3-Reranker-0.6B.Q4_K_M.gguf)
-- LLM: unsloth/gemma-4-E2B-it-GGUF (gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf)
+- LLM: unsloth/Qwen3.5-4B-GGUF (Qwen3.5-4B-Q4_K_M.gguf + mmproj-Qwen3.5-4B-F16.gguf)
 """
 
 import argparse
@@ -41,23 +41,20 @@ MODELS_CONFIG = {
         "subpath": os.path.join("reranker", "Qwen3-Reranker-0.6B.Q4_K_M.gguf"),
     },
     "llm": {
-        "name": "gemma-4-E2B-it-qat-UD-Q4_K_XL",
-        "repo_id": "unsloth/gemma-4-E2B-it-qat-GGUF",
-        "filename": "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf",
+        "name": "Qwen3.5-4B-Q4_K_M",
+        "repo_id": "unsloth/Qwen3.5-4B-GGUF",
+        "filename": "Qwen3.5-4B-Q4_K_M.gguf",
         "url": (
-            "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/"
-            "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"
+            "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
         ),
-        "subpath": os.path.join("llm", "gemma-4-E2B-it-qat-UD-Q4_K_XL.gguf"),
+        "subpath": os.path.join("llm", "Qwen3.5-4B-Q4_K_M.gguf"),
     },
     "llm_mmproj": {
-        "name": "gemma-4-E2B-it-mmproj-F16",
-        "repo_id": "unsloth/gemma-4-E2B-it-qat-GGUF",
+        "name": "mmproj-Qwen3.5-4B-F16",
+        "repo_id": "unsloth/Qwen3.5-4B-GGUF",
         "filename": "mmproj-F16.gguf",
-        "url": (
-            "https://huggingface.co/unsloth/gemma-4-E2B-it-qat-GGUF/resolve/main/mmproj-F16.gguf"
-        ),
-        "subpath": os.path.join("llm", "mmproj-F16.gguf"),
+        "url": ("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"),
+        "subpath": os.path.join("llm", "mmproj-Qwen3.5-4B-F16.gguf"),
     },
 }
 
@@ -79,11 +76,17 @@ def download_file(
         try:
             from huggingface_hub import hf_hub_download
 
-            hf_hub_download(
+            downloaded = hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
                 local_dir=os.path.dirname(dest_path),
             )
+            dest_abs = os.path.abspath(dest_path)
+            down_abs = os.path.abspath(downloaded)
+            if down_abs != dest_abs and os.path.exists(down_abs):
+                import shutil
+
+                shutil.copy2(down_abs, dest_abs)
             print("\n  Download complete.")
             return
         except Exception as e:
@@ -149,7 +152,7 @@ def download_reranker_model(models_dir: str) -> None:
 
 
 def download_llm_models(models_dir: str) -> None:
-    """Download Gemma-4 E2B-IT GGUF LLM and mmproj vision projector."""
+    """Download Qwen3.5-4B GGUF LLM and mmproj vision projector."""
     for key in ("llm", "llm_mmproj"):
         cfg = MODELS_CONFIG[key]
         dest_path = os.path.join(models_dir, cfg["subpath"])
@@ -218,7 +221,7 @@ def main() -> None:
     parser.add_argument(
         "--llm",
         action="store_true",
-        help="Download only Gemma-4-E2B-it GGUF & vision projector",
+        help="Download only Qwen3.5-4B Q4_K_M GGUF & vision projector",
     )
 
     args = parser.parse_args()

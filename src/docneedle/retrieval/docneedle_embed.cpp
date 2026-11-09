@@ -17,14 +17,24 @@ struct docneedle_embed_ctx {
     std::mutex mtx;
 };
 
-// Use hardware sqrtss directly via __builtin_sqrtf to prevent dynamic linking
+// Use hardware sqrtss directly via inline assembly to prevent dynamic linking
 // against glibc 2.43 libm sqrtf symbol, guaranteeing full portability to HF ZeroGPU.
+static inline float fast_sqrtf(float x) {
+    float res;
+#if defined(__x86_64__) || defined(_M_X64)
+    __asm__ ("sqrtss %1, %0" : "=x" (res) : "x" (x));
+#else
+    res = __builtin_sqrtf(x);
+#endif
+    return res;
+}
+
 static void normalize_l2(float * vec, int dim) {
     float norm = 0.0f;
     for (int i = 0; i < dim; i++) {
         norm += vec[i] * vec[i];
     }
-    norm = __builtin_sqrtf(norm);
+    norm = fast_sqrtf(norm);
     if (norm > 0.0f) {
         float inv_norm = 1.0f / norm;
         for (int i = 0; i < dim; i++) {
@@ -32,30 +42,6 @@ static void normalize_l2(float * vec, int dim) {
         }
     }
 }
-
-// Binary ABI struct matching libllama.so layout without the 8-byte lazy_mode shift
-// present in newer llama.h headers. This prevents tensor_split / progress_callback
-// pointer corruption during llama_model_load_from_file.
-struct libllama_model_params {
-    void * devices;
-    void * tensor_buft_overrides;
-    int32_t n_gpu_layers;
-    int32_t split_mode;
-    int32_t main_gpu;
-    int32_t load_mode;
-    const float * tensor_split;
-    void * progress_callback;
-    void * progress_callback_user_data;
-    void * kv_overrides;
-    bool vocab_only;
-    bool use_mmap;
-    bool use_mlock;
-    bool check_tensors;
-    char pad[12];
-};
-
-typedef struct libllama_model_params (*model_default_params_fn_t)();
-typedef llama_model * (*model_load_from_file_fn_t)(const char *, struct libllama_model_params);
 
 extern "C" {
 
@@ -68,19 +54,23 @@ void * docneedle_embed_init(
 ) {
     llama_backend_init();
 
-    auto default_params_fn = (model_default_params_fn_t)dlsym(RTLD_DEFAULT, "llama_model_default_params");
-    auto load_from_file_fn = (model_load_from_file_fn_t)dlsym(RTLD_DEFAULT, "llama_model_load_from_file");
-
-    if (!default_params_fn || !load_from_file_fn) {
-        return nullptr;
-    }
-
-    struct libllama_model_params mparams = default_params_fn();
+    llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;
     mparams.progress_callback = nullptr;
     mparams.progress_callback_user_data = nullptr;
 
-    llama_model * model = load_from_file_fn(model_path, mparams);
+    ggml_backend_dev_t cpu_dev = nullptr;
+    ggml_backend_dev_t devs[2] = { nullptr, nullptr };
+    if (n_gpu_layers == 0) {
+        cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        if (cpu_dev) {
+            devs[0] = cpu_dev;
+            mparams.devices = devs;
+        }
+        mparams.use_extra_bufts = false;
+    }
+
+    llama_model * model = llama_model_load_from_file(model_path, mparams);
     if (!model) {
         return nullptr;
     }
@@ -88,9 +78,9 @@ void * docneedle_embed_init(
     llama_context_params cparams = llama_context_default_params();
     cparams.embeddings = true;
     cparams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
-    cparams.n_ctx = 2048;
-    cparams.n_batch = 2048;
-    cparams.n_ubatch = 2048;
+    cparams.n_ctx = 4096;
+    cparams.n_batch = 4096;
+    cparams.n_ubatch = 4096;
     int actual_threads = (n_threads > 0 && n_threads <= 64) ? n_threads : 4;
     cparams.n_threads = actual_threads;
     cparams.n_threads_batch = actual_threads;
@@ -153,6 +143,14 @@ int docneedle_embed_text(
     }
     if (n_tokens <= 0) {
         return -2;
+    }
+
+    // Safety: Non-causal encoder strictly requires n_ubatch >= n_tokens.
+    // Hard-cap tokens strictly to context micro-batch budget (4096) to prevent GGML_ASSERT abort.
+    const int max_allowed_tokens = 4096;
+    if (n_tokens > max_allowed_tokens) {
+        n_tokens = max_allowed_tokens;
+        tokens.resize(n_tokens);
     }
 
     llama_batch batch = llama_batch_init(n_tokens, 0, 1);
@@ -228,7 +226,7 @@ int docneedle_embed_image(
 
     llama_memory_clear(llama_get_memory(ctx->lctx), true);
     llama_pos new_past = 0;
-    int eval_res = mtmd_helper_eval_chunks(ctx->mctx, ctx->lctx, chunks, 0, 0, 2048, true, &new_past);
+    int eval_res = mtmd_helper_eval_chunks(ctx->mctx, ctx->lctx, chunks, 0, 0, 4096, true, &new_past);
     mtmd_bitmap_free(bw.bitmap);
     mtmd_input_chunks_free(chunks);
     if (eval_res != 0) {

@@ -30,19 +30,11 @@ except Exception:
 
 
 _cuda_preloaded = False
+_modular_backends_preloaded = False
 
 
-def preload_cuda_runtime_libs() -> bool:
-    """Preload NVIDIA CUDA runtime and cuBLAS shared libraries with RTLD_GLOBAL.
-
-    Returns:
-        bool: True if at least one CUDA runtime library was successfully preloaded,
-              False otherwise.
-    """
-    global _cuda_preloaded
-    if _cuda_preloaded:
-        return True
-
+def configure_cuda_library_paths() -> list[Path]:
+    """Discover NVIDIA CUDA library directories and add them to LD_LIBRARY_PATH."""
     search_dirs: list[Path] = []
 
     # 1. Directly check installed nvidia namespace packages if present
@@ -123,7 +115,24 @@ def preload_cuda_runtime_libs() -> bool:
                 f":{curr_ld}" if curr_ld else ""
             )
 
-    # 4. Preload in strict dependency order:
+    return unique_dirs
+
+
+def preload_cuda_runtime_libs() -> bool:
+    """Preload NVIDIA CUDA runtime and cuBLAS shared libraries with RTLD_GLOBAL.
+
+    Returns:
+        bool: True if at least one CUDA runtime library was successfully preloaded,
+              False otherwise.
+    """
+    global _cuda_preloaded
+    if _cuda_preloaded:
+        preload_modular_backends()
+        return True
+
+    unique_dirs = configure_cuda_library_paths()
+
+    # Preload in strict dependency order:
     # libcublas depends on libcublasLt, so load libcublasLt first, then libcublas, then libcudart.
     # Include both CUDA 12 (for llama-cpp-python) and CUDA 13 + cuDNN 9 (for onnxruntime-gpu).
     target_patterns = [
@@ -176,4 +185,137 @@ def preload_cuda_runtime_libs() -> bool:
                     pass
 
     _cuda_preloaded = loaded_any
+    preload_modular_backends()
     return loaded_any
+
+
+def preload_modular_backends() -> bool:
+    """Preload modular CUDA and CPU compute backends for llama.cpp if supported."""
+    global _modular_backends_preloaded
+    if _modular_backends_preloaded:
+        return True
+
+    # Critical ZeroGPU / container guard:
+    # If on Linux and no NVIDIA device nodes (/dev/nvidia*) are mounted, do NOT attempt
+    # to load modular CUDA backends. Loading ggml-cuda without an accessible device triggers
+    # cuInit failure ('ggml_cuda_init: no CUDA-capable device is detected') which poisons
+    # parent process memory and hangs forked ZeroGPU workers.
+    if sys.platform.startswith("linux"):
+        has_nvidia_dev = any(
+            Path(f"/dev/{dev}").exists() for dev in ("nvidia0", "nvidiactl", "nvhost-ctrl")
+        )
+        if not has_nvidia_dev:
+            logger.debug(
+                "No accessible NVIDIA device node (/dev/nvidia*) detected. "
+                "Skipping modular CUDA backend preload."
+            )
+            return False
+
+    try:
+        import llama_cpp
+
+        lib_dir = Path(llama_cpp.__file__).resolve().parent / "lib"
+        libggml_path = lib_dir / "libggml.so"
+        if libggml_path.is_file():
+            libggml = ctypes.CDLL(str(libggml_path))
+            if hasattr(libggml, "ggml_backend_load_all_from_path"):
+                libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+                libggml.ggml_backend_load_all_from_path(str(lib_dir).encode("utf-8"))
+                logger.info(
+                    "--> [CUDA Backends] Preloaded modular llama.cpp backends from %s", lib_dir
+                )
+                _modular_backends_preloaded = True
+                return True
+    except Exception as e:
+        logger.debug("Modular backend preloading skipped: %s", e)
+    return False
+
+
+def prewarm_models_page_cache(model_paths: list[str | Path] | None = None) -> list[str]:
+    """Pre-warm model files into Linux OS page cache to eliminate disk I/O latency on mmap().
+
+    This function reads model files in 16MB sequential chunks into user memory and hints the kernel
+    with POSIX_FADV_WILLNEED. The Linux kernel retains the pages in OS page cache (system RAM).
+    When llama.cpp subsequently calls mmap() with use_mmap=True, page faults are serviced
+    directly from system RAM without blocking on physical disk I/O.
+
+    This function does NOT call CUDA, touch GPU devices, or initialize libcuda, so it is
+    100% safe to run in the parent web process or background threads.
+
+    Returns:
+        list[str]: Names of successfully pre-warmed model files.
+    """
+    import time
+
+    targets: list[Path] = []
+    if model_paths:
+        for p in model_paths:
+            p_obj = Path(p)
+            if p_obj.is_file():
+                targets.append(p_obj)
+    else:
+        # Auto-discover from config or standard model storage directories
+        try:
+            from docneedle.config import settings
+
+            base_dir = Path(settings.model_storage_dir)
+        except Exception:
+            base_dir = Path("models")
+
+        if base_dir.is_dir():
+            for sub in ("llm", "embedding"):
+                sub_dir = base_dir / sub
+                if sub_dir.is_dir():
+                    for f in sorted(sub_dir.glob("*.gguf")):
+                        if f.is_file() and not f.name.endswith(".incomplete"):
+                            targets.append(f)
+
+    prewarmed: list[str] = []
+    if not targets:
+        return prewarmed
+
+    t0 = time.perf_counter()
+    chunk_size = 16 * 1024 * 1024  # 16 MB buffer
+    buf = bytearray(chunk_size)
+    total_bytes = 0
+
+    for model_path in targets:
+        try:
+            file_size = model_path.stat().st_size
+            file_t0 = time.perf_counter()
+            with open(model_path, "rb") as f:
+                fd = f.fileno()
+                if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_WILLNEED"):
+                    try:
+                        os.posix_fadvise(fd, 0, file_size, os.POSIX_FADV_WILLNEED)
+                    except Exception:
+                        pass
+                read_bytes = 0
+                while True:
+                    n = f.readinto(buf)
+                    if not n:
+                        break
+                    read_bytes += n
+            total_bytes += read_bytes
+            prewarmed.append(model_path.name)
+            file_elapsed = max(time.perf_counter() - file_t0, 0.001)
+            speed_mb = (read_bytes / (1024 * 1024)) / file_elapsed
+            logger.info(
+                "--> [PageCache] Pre-warmed %s (%.1f MB in %.2fs, %.1f MB/s)",
+                model_path.name,
+                read_bytes / (1024 * 1024),
+                file_elapsed,
+                speed_mb,
+            )
+        except Exception as e:
+            logger.debug("Failed pre-warming %s: %s", model_path, e)
+
+    total_elapsed = max(time.perf_counter() - t0, 0.001)
+    logger.info(
+        "--> [PageCache] Pre-warmed %d model(s) (%.1f MB total) into OS RAM in %.2fs (%.1f MB/s).",
+        len(prewarmed),
+        total_bytes / (1024 * 1024),
+        total_elapsed,
+        (total_bytes / (1024 * 1024)) / total_elapsed,
+    )
+    return prewarmed

@@ -1,4 +1,5 @@
 import logging
+import time
 
 import numpy as np
 
@@ -66,26 +67,48 @@ class SessionVectorStore:
         if not chunks:
             return
 
-        logger.info(f"--> [VECTOR STORE] Embedding {len(chunks)} chunks in RAM (text/images)...")
+        t_start = time.perf_counter()
+        logger.info("--> [VECTOR STORE] Embedding %d chunks in RAM (text/images)...", len(chunks))
         self.chunks.extend(chunks)
 
-        # Compute embeddings for new chunks in RAM (supporting multimodal visual & text)
-        new_embs_list: list[np.ndarray] = []
-        for c in chunks:
-            if c.image_bytes is not None:
-                img_emb = self.embedder.embed_images([c.image_bytes])
-                new_embs_list.append(img_emb)
-            else:
-                txt_emb = self.embedder.embed_texts(
-                    [c.text], is_query=False, doc_names=[c.doc_name]
-                )
-                new_embs_list.append(txt_emb)
+        # Collect text chunks vs placeholder image chunks for batched processing
+        text_indices: list[int] = []
+        text_list: list[str] = []
+        doc_names_list: list[str] = []
 
-        new_embs = (
-            np.vstack(new_embs_list)
-            if new_embs_list
-            else np.zeros((0, self.embedder.dimension), dtype=np.float32)
-        )
+        image_indices: list[int] = []
+        image_bytes_list: list[bytes] = []
+
+        for idx, c in enumerate(chunks):
+            is_placeholder = (
+                "[Görsel Belge Sayfası" in c.text
+                or "[Görsel Doküman" in c.text
+                or len(c.text.strip()) == 0
+            )
+            if c.image_bytes is not None and is_placeholder:
+                image_indices.append(idx)
+                image_bytes_list.append(c.image_bytes)
+            else:
+                text_indices.append(idx)
+                text_list.append(c.text)
+                doc_names_list.append(c.doc_name or "document")
+
+        new_embs = np.zeros((len(chunks), self.embedder.dimension), dtype=np.float32)
+
+        t_emb_start = time.perf_counter()
+        if text_list:
+            text_embs = self.embedder.embed_texts(
+                text_list, is_query=False, doc_names=doc_names_list
+            )
+            for local_i, global_i in enumerate(text_indices):
+                new_embs[global_i] = text_embs[local_i]
+
+        if image_bytes_list:
+            img_embs = self.embedder.embed_images(image_bytes_list)
+            for local_i, global_i in enumerate(image_indices):
+                new_embs[global_i] = img_embs[local_i]
+
+        t_emb_elapsed = max(time.perf_counter() - t_emb_start, 0.001)
 
         if self.embeddings is None or len(self.embeddings) == 0:
             self.embeddings = new_embs
@@ -93,9 +116,23 @@ class SessionVectorStore:
             self.embeddings = np.vstack([self.embeddings, new_embs])
 
         # Re-index BM25
+        t_bm25_start = time.perf_counter()
         self.bm25 = BM25Engine(self.chunks)
+        t_bm25_elapsed = max(time.perf_counter() - t_bm25_start, 0.001)
+
+        t_total_indexing = time.perf_counter() - t_start
+        speed_chunks = len(chunks) / t_emb_elapsed
         logger.info(
-            f"--> [INDEX COMPLETE] Indexed {len(self.chunks)} total chunks in RAM (Dense + BM25)."
+            "--> [INDEX COMPLETE] Indexed %d chunks (texts=%d, images=%d) in %.2fs "
+            "(Embed: %.2fs @ %.1f chunk/s, BM25: %.2fs). Total store: %d chunks.",
+            len(chunks),
+            len(text_list),
+            len(image_bytes_list),
+            t_total_indexing,
+            t_emb_elapsed,
+            speed_chunks,
+            t_bm25_elapsed,
+            len(self.chunks),
         )
 
     def _rank_dense(self, query_vec: np.ndarray) -> dict[str, tuple[int, float]]:
@@ -137,7 +174,15 @@ class SessionVectorStore:
             dense_score = None
             if chunk_id in dense_ranks:
                 rank_dense, d_score = dense_ranks[chunk_id]
-                rrf_score += 1.0 / (rrf_constant + rank_dense)
+                # A visual chunk without genuine digital text cannot produce BM25 keyword hits.
+                # Double its dense RRF weight (2.0) so it can compete with hybrid text chunks.
+                is_visual_only = c.image_bytes is not None and (
+                    "[Görsel Belge Sayfası" in c.text
+                    or "[Görsel Doküman" in c.text
+                    or len(c.text.strip()) == 0
+                )
+                dense_w = 2.0 if is_visual_only else 1.0
+                rrf_score += dense_w * (1.0 / (rrf_constant + rank_dense))
                 dense_score = d_score
 
             sparse_score = None

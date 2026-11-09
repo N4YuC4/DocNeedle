@@ -191,7 +191,7 @@ class Settings(BaseSettings):
 
     # 2. Ingestion & Document Parser (OCR-Free Visual & Digital Text Ingestion)
     model_storage_dir: str = Field(default_factory=_resolve_model_dir)
-    max_upload_size_mb: int = 50
+    max_upload_size_mb: int = 100
     ocr_enabled: bool = False
     pdf_render_scale: float = 1.5
     pdf_embedded_text_min_chars: int = 50
@@ -204,7 +204,7 @@ class Settings(BaseSettings):
     chunker_max_tokens: int = 768
     chunker_repeat_table_header: bool = True
     chunker_merge_peers: bool = True
-    chunker_max_chunk_chars: int = 1000
+    chunker_max_chunk_chars: int = 4000
     chunker_min_split_chars: int = 200
     chunker_overflow_factor: float = 1.25
 
@@ -237,32 +237,30 @@ class Settings(BaseSettings):
 
     # 7. Extraction Service & LLM Inference (Local GGUF Model)
     extraction_top_k: int = 5
+    extraction_schema_batch_size: int = 35
     extraction_context_delimiter: str = "\n\n---\n\n"
-    llm_model_name: str = "gemma-4-E2B-it-qat-UD-Q4_K_XL"
-    llm_mmproj_name: str = "mmproj-F16"
-    llm_n_ctx: int = 16384
+    llm_model_name: str = "Qwen3.5-4B-Q4_K_M"
+    llm_mmproj_name: str = "mmproj-Qwen3.5-4B-F16"
+    llm_n_ctx: int = 32768
     llm_temperature: float = 0.0
     llm_top_p: float = 0.95
-    llm_max_tokens: int = 2048
+    llm_max_tokens: int = 4096
     llm_single_field_max_tokens: int = 128
     llm_thinking_max_tokens: int = 512
     llm_enable_thinking: bool = False
     llm_log_extraction_payloads: bool = False
     llm_domain_rules: str = (
         "# DOMAIN SPECIFICS\n"
-        "- In lease and rental contracts, 'Kira Bedeli' denotes the agreed periodic or "
-        "monthly rent amount; extract this stated amount directly.\n"
+        "- When rent or payment amount is requested in lease contracts, extract the stated "
+        "numerical rent ('Kira Bedeli') and currency directly.\n"
         "- For address or location queries, extract the physical street/city address, omitting "
         "document timestamps and agency headers.\n"
     )
     llm_stop_tokens: list[str] = Field(
         default_factory=lambda: [
-            "</s>",
-            "<turn|>",
-            "<end_of_turn>",
-            "<|turn>",
             "<|im_end|>",
-            "<|eot_id|>",
+            "<|endoftext|>",
+            "</s>",
         ]
     )
     # Speculative Decoding (Prompt Lookup Decoding)
@@ -287,11 +285,12 @@ class Settings(BaseSettings):
     llm_n_gpu_layers: int = 0
     cpu_threads: int = Field(default_factory=_default_cpu_threads)
     cpu_threads_batch: int = Field(default_factory=_default_cpu_threads_batch)
-    model_n_batch: int = 512
+    model_n_batch: int = 256
+    model_n_ubatch: int = 256
     reranker_n_ctx: int = 2048
-    model_kv_cache_type_k: int = 8  # 8 = GGML_TYPE_Q8_0 (8-bit quantized KV cache)
-    model_kv_cache_type_v: int = 8  # 8 = GGML_TYPE_Q8_0 (8-bit quantized KV cache)
-    model_flash_attn: bool = True  # Required for quantized V cache in llama.cpp
+    model_kv_cache_type_k: int = 1  # 1 = GGML_TYPE_F16 (standard stable FP16 KV cache)
+    model_kv_cache_type_v: int = 1  # 1 = GGML_TYPE_F16 (standard stable FP16 KV cache)
+    model_flash_attn: bool = True  # Accelerates prompt eval on GPU with stable FP16 KV cache
 
     # 9. Security & Resource Constraints (Configurable via [security] or flat keys in config.toml)
     max_schema_items: int = 50

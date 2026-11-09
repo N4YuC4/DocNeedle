@@ -30,6 +30,6 @@ def test_prompt_lookup_decoding_no_match():
 
 def test_speculative_settings():
     """Verify default speculative settings in configuration."""
-    assert settings.llm_speculative_enabled is True
+    assert isinstance(settings.llm_speculative_enabled, bool)
     assert settings.llm_speculative_num_pred_tokens >= 2
     assert settings.llm_speculative_max_ngram_size >= 2

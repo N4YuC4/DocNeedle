@@ -212,8 +212,8 @@ async def test_jobs_api_e2e_polling_and_sse() -> None:
         assert poll_url == f"/v1/jobs/{job_id}"
         assert events_url == f"/v1/jobs/{job_id}/events"
 
-        # 2. Poll until completed or timeout
-        max_retries = 30
+        # 2. Poll until completed or timeout (up to 30s on CPU)
+        max_retries = 60
         completed = False
         final_job = None
 
