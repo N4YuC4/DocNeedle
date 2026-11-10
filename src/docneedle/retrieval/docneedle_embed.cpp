@@ -104,6 +104,7 @@ void * docneedle_embed_init(
     mtmd_context_params mcparams = mtmd_context_params_default();
     mcparams.use_gpu = (n_gpu_layers != 0);
     mcparams.warmup = false;
+    mcparams.print_timings = false;
     mtmd_context * mctx = mtmd_init_from_file(mmproj_path, model, mcparams);
     if (!mctx) {
         llama_free(lctx);

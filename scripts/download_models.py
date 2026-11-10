@@ -20,6 +20,7 @@ MODELS_CONFIG = {
             "embeddinggemma-2-UD-Q4_K_XL.gguf"
         ),
         "subpath": os.path.join("embedding", "embeddinggemma-2-UD-Q4_K_XL.gguf"),
+        "min_size_bytes": 150_000_000,
     },
     "embedding_mmproj": {
         "name": "embeddinggemma-2-mmproj-F16",
@@ -29,6 +30,7 @@ MODELS_CONFIG = {
             "https://huggingface.co/unsloth/embeddinggemma-2-GGUF/resolve/main/mmproj-F16.gguf"
         ),
         "subpath": os.path.join("embedding", "mmproj-F16.gguf"),
+        "min_size_bytes": 900_000_000,
     },
     "reranker": {
         "name": "Qwen3-Reranker-0.6B.Q4_K_M",
@@ -39,6 +41,7 @@ MODELS_CONFIG = {
             "Qwen3-Reranker-0.6B.Q4_K_M.gguf"
         ),
         "subpath": os.path.join("reranker", "Qwen3-Reranker-0.6B.Q4_K_M.gguf"),
+        "min_size_bytes": 350_000_000,
     },
     "llm": {
         "name": "Qwen3.5-4B-Q4_K_M",
@@ -48,6 +51,7 @@ MODELS_CONFIG = {
             "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf"
         ),
         "subpath": os.path.join("llm", "Qwen3.5-4B-Q4_K_M.gguf"),
+        "min_size_bytes": 2_500_000_000,
     },
     "llm_mmproj": {
         "name": "mmproj-Qwen3.5-4B-F16",
@@ -55,6 +59,7 @@ MODELS_CONFIG = {
         "filename": "mmproj-F16.gguf",
         "url": ("https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/mmproj-F16.gguf"),
         "subpath": os.path.join("llm", "mmproj-Qwen3.5-4B-F16.gguf"),
+        "min_size_bytes": 600_000_000,
     },
 }
 
@@ -64,12 +69,31 @@ def download_file(
     dest_path: str,
     repo_id: str | None = None,
     filename: str | None = None,
+    min_size_bytes: int = 0,
 ) -> None:
-    """Download a file with progress reporting."""
+    """Download a file atomically with progress and integrity verification."""
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
     if os.path.exists(dest_path):
-        print(f"File already exists: {dest_path}")
-        return
+        actual_size = os.path.getsize(dest_path)
+        if min_size_bytes > 0 and actual_size < min_size_bytes:
+            print(
+                f"\n⚠️  Existing file {dest_path} is incomplete or corrupt "
+                f"({actual_size} bytes < minimum {min_size_bytes} bytes). Re-downloading..."
+            )
+            try:
+                os.remove(dest_path)
+            except OSError:
+                pass
+        else:
+            print(f"File verified and exists: {dest_path} ({actual_size / (1024 * 1024):.1f} MB)")
+            return
+
+    temp_path = f"{dest_path}.tmp"
+    if os.path.exists(temp_path):
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
 
     print(f"Downloading: {url} -> {dest_path}")
 
@@ -89,20 +113,40 @@ def download_file(
 
     headers = {"User-Agent": "DocNeedle-ModelDownloader/1.0"}
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as response, open(dest_path, "wb") as out_file:
-        total_size = int(response.headers.get("Content-Length", 0))
-        block_size = 1024 * 1024  # 1MB blocks
-        downloaded = 0
-        block_num = 0
-        while True:
-            chunk = response.read(block_size)
-            if not chunk:
-                break
-            out_file.write(chunk)
-            downloaded += len(chunk)
-            block_num += 1
-            report_progress(block_num, block_size, total_size)
-    print("\n  Download complete.")
+    try:
+        with urllib.request.urlopen(req) as response, open(temp_path, "wb") as out_file:
+            total_size = int(response.headers.get("Content-Length", 0))
+            block_size = 1024 * 1024  # 1MB blocks
+            downloaded = 0
+            block_num = 0
+            while True:
+                chunk = response.read(block_size)
+                if not chunk:
+                    break
+                out_file.write(chunk)
+                downloaded += len(chunk)
+                block_num += 1
+                report_progress(block_num, block_size, total_size)
+        print("\n  Download complete. Verifying file integrity...")
+        temp_size = os.path.getsize(temp_path)
+        if total_size > 0 and temp_size < total_size:
+            raise IOError(
+                f"Download incomplete: received {temp_size} bytes, expected {total_size} bytes."
+            )
+        if min_size_bytes > 0 and temp_size < min_size_bytes:
+            raise IOError(
+                f"Downloaded file too small: {temp_size} bytes, "
+                f"minimum expected: {min_size_bytes} bytes."
+            )
+        os.replace(temp_path, dest_path)
+        print(f"  Successfully staged model file: {dest_path}")
+    except Exception:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise
 
 
 def download_embedding_models(models_dir: str) -> None:
@@ -116,6 +160,7 @@ def download_embedding_models(models_dir: str) -> None:
             dest_path,
             repo_id=cfg.get("repo_id"),
             filename=cfg.get("filename"),
+            min_size_bytes=cfg.get("min_size_bytes", 0),
         )
 
 
@@ -129,6 +174,7 @@ def download_reranker_model(models_dir: str) -> None:
         dest_path,
         repo_id=cfg.get("repo_id"),
         filename=cfg.get("filename"),
+        min_size_bytes=cfg.get("min_size_bytes", 0),
     )
 
 
@@ -143,6 +189,7 @@ def download_llm_models(models_dir: str) -> None:
             dest_path,
             repo_id=cfg.get("repo_id"),
             filename=cfg.get("filename"),
+            min_size_bytes=cfg.get("min_size_bytes", 0),
         )
 
 
@@ -171,14 +218,13 @@ def ensure_all_models_present(models_dir: str | None = None) -> None:
 
     for _, cfg in MODELS_CONFIG.items():
         dest = os.path.join(models_dir, cfg["subpath"])
-        if not os.path.exists(dest):
-            print(f"Missing model [{cfg['name']}]. Starting automatic bootstrap download...")
-            download_file(
-                cfg["url"],
-                dest,
-                repo_id=cfg.get("repo_id"),
-                filename=cfg.get("filename"),
-            )
+        download_file(
+            cfg["url"],
+            dest,
+            repo_id=cfg.get("repo_id"),
+            filename=cfg.get("filename"),
+            min_size_bytes=cfg.get("min_size_bytes", 0),
+        )
     download_chunker_tokenizer()
 
 

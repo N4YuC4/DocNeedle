@@ -108,7 +108,7 @@ async def test_job_manager_concurrent_job_limit(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_job_manager_free_threaded_concurrency_stress() -> None:
-    """Stress-test JobManager under Python 3.14t Free-Threaded (no-GIL) concurrency.
+    """Stress-test JobManager under Python 3.14+ asynchronous multi-client concurrency.
 
     Concurrently subscribes, receives events, unsubscribes, updates progress,
     and appends extracted items across multiple concurrent tasks without race conditions.

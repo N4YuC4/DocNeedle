@@ -50,11 +50,11 @@ llm_n_gpu_layers = -1
 
 # EN: Logical batch token count processed simultaneously by llama.cpp during prompt evaluation
 # TR: Prompt işleme sırasında llama.cpp tarafından aynı anda işlenen mantıksal token (batch) sayısı
-model_n_batch = 256
+model_n_batch = 512
 
 # EN: Physical micro-batch token count evaluated in a single GPU kernel launch
 # TR: Tek bir GPU kernel çağrısında işlenen fiziksel mikro-batch token sayısı
-model_n_ubatch = 256
+model_n_ubatch = 512
 
 # EN: Maximum sequence context window size (in tokens) reserved for the cross-encoder reranker
 # TR: Çapraz kodlayıcı (reranker) için ayrılan maksimum bağlam penceresi boyutu (token cinsinden)

@@ -358,3 +358,18 @@ def test_perform_extraction_ui_with_progress_mock():
         )
         assert resp_dict["found_items"] == 1
         assert "Processing Time" in html_out
+
+
+def test_get_sample_document_files():
+    from app import get_sample_document_files
+
+    invoice_files = get_sample_document_files("invoice")
+    assert len(invoice_files) == 1
+    assert invoice_files[0].endswith("sample_commercial_invoice.pdf")
+    assert Path(invoice_files[0]).exists()
+
+    all_files = get_sample_document_files("all")
+    assert len(all_files) == 3
+    assert any("sample_commercial_invoice.pdf" in f for f in all_files)
+    assert any("sample_lease_agreement.pdf" in f for f in all_files)
+    assert any("sample_service_receipt.png" in f for f in all_files)

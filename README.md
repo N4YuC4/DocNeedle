@@ -11,12 +11,16 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.14t%20(Free--Threaded)-blue.svg" alt="Python 3.14t Free-Threaded" />
+  <img src="https://img.shields.io/badge/Python-3.14+-blue.svg" alt="Python 3.14+" />
   <img src="https://img.shields.io/badge/FastAPI-0.115+-009688.svg" alt="FastAPI" />
   <img src="https://img.shields.io/badge/Gradio-6+-orange.svg" alt="Gradio 6" />
   <img src="https://img.shields.io/badge/ZeroGPU-Ready-7928ca.svg" alt="ZeroGPU Ready" />
   <img src="https://img.shields.io/badge/Privacy-Zero%20Disk%20Leakage-brightgreen.svg" alt="Zero Disk Leakage" />
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License Apache 2.0" />
+</p>
+
+<p align="center">
+  <img src="assets/demo.gif" alt="DocNeedle Live Extraction Demo" width="92%" />
 </p>
 
 ---
@@ -51,7 +55,7 @@ Unlike pipelines built on cloud APIs or brittle OCR engines, DocNeedle provides:
 - **Zero cloud reliance:** All models run in-process via native multi-architecture `llama.cpp` bindings and C++ shared libraries with hardware acceleration.
 - **Zero-disk privacy:** Payloads, embeddings, and indices live only in volatile RAM and are purged unconditionally after each request (`store.clear()`).
 - **OCR-free visual RAG:** Digital PDFs are parsed for text and tables; scanned documents and images are ingested as high-resolution page chunks, embedded cross-modally (SigLIP projector) and read directly by the multimodal Qwen3.5-4B LLM.
-- **Free-threaded concurrency:** Python 3.14t (PEP 703, No-GIL) for true multi-core parsing, chunking, and HTTP handling.
+- **High-throughput asynchronous concurrency:** Modern Python async pipeline for multi-core parsing, Docling chunking, and non-blocking HTTP streaming.
 
 ---
 
@@ -77,7 +81,7 @@ Unlike pipelines built on cloud APIs or brittle OCR engines, DocNeedle provides:
 
 | Layer | Technologies |
 | :--- | :--- |
-| **Runtime** | Python 3.14t (Free-Threaded, PEP 703 No-GIL) |
+| **Runtime** | Python 3.14+ (Modern Async & Multi-Core) |
 | **Microservice** | FastAPI 0.115+, Uvicorn 0.32+, Pydantic v2, Pydantic-Settings |
 | **Web Dashboard** | Gradio 6+, dark mode, dynamic schema builder, formatted/raw JSON tabs |
 | **Ingestion** | Docling Core 2.15+, pypdfium2, python-docx, openpyxl, Pillow |
@@ -115,18 +119,18 @@ Source: official `leaderboard.csv` from [run-llama/ExtractBench](https://github.
 | **OpenAI GPT-6 Astra** | OpenAI | Commercial Frontier VLM | **91.91%** | 97.22% | 90.56% | 31.70% | 0.00% *(N/A)* | $0.1109 | Cloud API (External) |
 | **Qwen3.5 4B (Raw Base Model)** | Alibaba / OSS | Standalone Base Model | **82.43%** | 89.06% | 76.64% | 27.31% | 0.00% *(N/A)* | Free (self-host) | Self-Hosted / Local |
 | **Google Gemini 3.8 Flash** | Google | Commercial Fast VLM | **80.71%** | 88.14% | 72.23% | 28.70% | 0.00% *(N/A)* | $0.0043 | Cloud API (External) |
-| **DocNeedle (In-Process)** | **DocNeedle** | **Qwen3.5-4B + Gemma2-RAG** | **75.78%** | **77.30%** | **69.53%** | **70.59%** | **78.82%** | **$0.00 (on-premise)** | **Zero-Disk RAM / Air-Gapped** |
+| **DocNeedle (In-Process)** | **DocNeedle** | **Qwen3.5-4B + Gemma2-RAG** | **75.81%** | **77.25%** | **69.85%** | **71.05%** | **82.52%** | **$0.00 (on-premise)** | **Zero-Disk RAM / Air-Gapped** |
 
 > [!TIP]
-> **Model-agnostic scaling:** The published results (**75.78% Overall F1**, **90.70% Short Grounding**) use a compact **4B model** (`Qwen3.5-4B-Q4_K_M`, ~2.6 GB VRAM) and a **0.6B embedder** to validate operation on commodity hardware (6 GB VRAM minimum, or multi-core CPUs). Ingestion, AcroForm parsing, hybrid RAG, and collision resolution are model-agnostic, so larger weights (e.g. **Qwen3.5-9B**, **Qwen3.5-35B**) offer a scaling path toward **88%–95%+ F1** while keeping zero-disk privacy and zero per-page fees.
+> **Model-agnostic scaling:** The published results (**75.81% Overall F1**, **92.42% Short Grounding**) use a compact **4B model** (`Qwen3.5-4B-Q4_K_M`, ~2.6 GB VRAM) and a **0.6B embedder** to validate operation on commodity hardware (6 GB VRAM minimum, or multi-core CPUs). Ingestion, AcroForm parsing, hybrid RAG, and collision resolution are model-agnostic, so larger weights (e.g. **Qwen3.5-9B**, **Qwen3.5-35B**) offer a scaling path toward **88%–95%+ F1** while keeping zero-disk privacy and zero per-page fees.
 
 ### Key Insights & Trade-offs
 
-- **Long-Document Resilience (+43.28 pts vs. base model):** Beyond 50 pages, unaugmented models suffer attention degradation (raw Qwen3.5 4B drops from 89.06% to 27.31%, GPT-6 Astra to 31.70%). DocNeedle sustains **70.59% F1** (2.5× improvement) by routing relevant visual/text chunks into a bounded context.
-- **Auditable Page Grounding (90.70% short, 78.82% overall):** Unlike raw VLMs that score 0.00% on source attribution, DocNeedle pairs every extracted value with verified page numbers and verbatim text snippets.
+- **Long-Document Resilience (+43.74 pts vs. base model):** Beyond 50 pages, unaugmented models suffer attention degradation (raw Qwen3.5 4B drops from 89.06% to 27.31%, GPT-6 Astra to 31.70%). DocNeedle sustains **71.05% F1** (2.6× improvement) by routing relevant visual/text chunks into a bounded context.
+- **Auditable Page Grounding (92.42% short, 82.52% overall):** Unlike raw VLMs that score 0.00% on source attribution, DocNeedle pairs every extracted value with verified page numbers and verbatim text snippets.
 - **Deterministic Form Extraction:** Native PDF AcroForm parsing via `pypdfium2` extracts interactive checkboxes and field inputs without OCR artifacts.
 - **Local Privacy & Predictable Costs:** Runs 100% in-process with zero network telemetry; vectors and chunk images reside in volatile RAM and are wiped via `finally: store.clear()`.
-- **Engineering Trade-offs:** Dense single-page documents may experience retrieval filtering on isolated clauses (77.30% F1 vs. 89.06% unconstrained base model), and local multimodal inference averages ~34.7s/doc on workstation GPUs.
+- **Engineering Trade-offs:** Dense single-page documents may experience retrieval filtering on isolated clauses (77.25% F1 vs. 89.06% unconstrained base model), requiring balanced context windows.
 
 ### Detailed Results by Split
 
@@ -136,15 +140,13 @@ Generated by `scripts/benchmark_extractbench.py` and stored in `benchmark_result
 | :--- | :---: | :---: | :---: | :---: |
 | **Documents** | 252 | 98 | 20 | **370** |
 | **Target Fields** | 10,676 | 2,808 | 93 | **13,577** |
-| **Strictly Matched Fields** | 8,776 | 2,159 | 59 | **10,994** |
-| **Unified Value F1** | **77.30%** | **69.53%** | **70.59%** | **75.78%** |
-| **Value Precision** | **81.37%** | **79.55%** | **80.60%** | **81.04%** |
-| **Value Recall** | **73.62%** | **61.75%** | **62.79%** | **71.16%** |
-| **Page Grounding** | **90.70%** | **55.03%** | **45.58%** | **78.82%** |
-| **Strict Null Accuracy** | **82.34%** | **84.90%** | **27.78%** | **82.74%** |
-| **Perfect Documents Rate** | 3.57% (9) | 1.02% (1) | 0.00% (0) | **2.70% (10)** |
-| **Avg. Latency / Document** | 34.7 s | 67.8 s | 95.9 s | **46.9 s** |
-| **Total Execution Time** | 2h 30m 38s | 1h 50m 48s | 32m 11s | **4h 49m 28s** |
+| **Strictly Matched Fields** | 8,759 | 2,160 | 59 | **10,978** |
+| **Unified Value F1** | **77.25%** | **69.85%** | **71.05%** | **75.81%** |
+| **Value Precision** | **81.05%** | **79.48%** | **81.82%** | **80.78%** |
+| **Value Recall** | **73.79%** | **62.31%** | **62.79%** | **71.41%** |
+| **Page Grounding** | **92.42%** | **63.80%** | **49.58%** | **82.52%** |
+| **Strict Null Accuracy** | **81.91%** | **84.66%** | **29.41%** | **82.37%** |
+| **Perfect Documents Rate** | 3.17% (8) | 1.02% (1) | 0.00% (0) | **2.43% (9)** |
 
 ### Reproducing the Benchmark
 
@@ -192,12 +194,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 git clone https://github.com/N4YuC4/DocNeedle.git
 cd DocNeedle
 
-uv python install 3.14t        # free-threaded Python
-uv venv --python 3.14t
+uv venv
 source .venv/bin/activate
-
-python -c "import sys; print('Free-threaded (No-GIL):', not getattr(sys, '_is_gil_enabled', lambda: True)())"
-# Expected: Free-threaded (No-GIL): True
 ```
 
 ### 2. Install Dependencies
@@ -366,6 +364,10 @@ LLMs may repeat one salient number or entity across several unpopulated fields. 
 
 ## Web Dashboard (Gradio 6 UI)
 
+<p align="center">
+  <img src="assets/dashboard_preview.png" alt="DocNeedle Interactive Web Dashboard" width="92%" />
+</p>
+
 Served at `http://localhost:7860`, matching the REST API:
 
 - **Schema Builder:** Add, edit, or remove fields visually with type dropdowns.
@@ -381,7 +383,7 @@ Served at `http://localhost:7860`, matching the REST API:
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
 | `GET` | `/` | Service info, docs links, version |
-| `GET` | `/healthz`, `/health` | Diagnostics (GIL status, GPU/CUDA, models, config); `/health` is an alias |
+| `GET` | `/healthz`, `/health` | Diagnostics (Runtime, GPU/CUDA, models, job queue, config); `/health` is an alias |
 | `POST` | `/v1/extract` | **Synchronous** extraction, returns complete JSON |
 | `POST` | `/v1/jobs` | **Asynchronous** extraction, returns `202 Accepted` with tracking URLs |
 | `GET` | `/v1/jobs/{job_id}` | Poll job progress and results |
@@ -536,7 +538,7 @@ with httpx.Client(timeout=None) as client:
 
 ### 5. Health & Hardware Diagnostics (`GET /healthz`)
 
-Returns interpreter, GIL state, CUDA/GPU hardware, model readiness, job counts, and active configuration:
+Returns runtime environment, CUDA/GPU hardware, model readiness, job counts, and active configuration:
 
 ```json
 {
@@ -544,9 +546,13 @@ Returns interpreter, GIL state, CUDA/GPU hardware, model readiness, job counts, 
   "service": "DocNeedle",
   "version": "0.1.0",
   "uptime_seconds": 1284.5,
-  "free_threaded": true,
-  "gil_enabled": false,
-  "hardware": {"device": "cuda", "gpu_enabled": true, "torch_cuda": true},
+  "hardware": {
+    "device": "cuda",
+    "gpu_enabled": true,
+    "backend": "llama.cpp",
+    "gpu_offload_supported": true,
+    "cuda_runtime_detected": true
+  },
   "models": {"all_ready": true, "llm": {"ready": true}, "embedding": {"ready": true}, "reranker": {"ready": true}},
   "jobs": {"active_jobs": 0, "total_cached_jobs": 2},
   "config": {"llm_model": "Qwen3.5-4B-Q4_K_M", "embedding_model": "unsloth/embeddinggemma-2-GGUF", "gpu_enabled": true}
@@ -688,7 +694,7 @@ max_concurrent_jobs = 10       # Parallel background jobs
 | `uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py` | Fast unit tests (no model load) |
 | `uv run pytest tests/test_health.py` | `/healthz` and route tests |
 | `uv run ruff check . [--fix]` | Lint (optionally auto-fix) |
-| `uv run ruff format .` | Format code (Python 3.14t profile) |
+| `uv run ruff format .` | Format code (Python 3.14 profile) |
 | `bash scripts/deploy_space.sh [SPACE_ID]` | Deploy to Hugging Face Spaces (ZeroGPU) |
 
 ---

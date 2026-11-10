@@ -484,7 +484,7 @@ class DocNeedleBenchmarkClient:
         api_url: str = "http://localhost:8000",
         batch_size: int = 35,
         enable_reranker: bool = False,
-        timeout: float = 300.0,
+        timeout: float | None = None,
     ) -> None:
         self.api_url = api_url.rstrip("/")
         self.batch_size = max(1, min(batch_size, 48))  # strictly within max_schema_items (50)
@@ -545,7 +545,11 @@ class DocNeedleBenchmarkClient:
                             f"{response.text[:200]}"
                         )
                     except (httpx.RequestError, httpx.TimeoutException) as err:
-                        logger.warning(f"Connection error on attempt {attempt}: {err}")
+                        err_msg = str(err).strip() or "Request timed out"
+                        err_type = type(err).__name__
+                        logger.warning(
+                            f"Connection error on attempt {attempt}: {err_type} ({err_msg})"
+                        )
 
                     if attempt < max_retries:
                         await asyncio.sleep(2.0 * attempt)
@@ -749,7 +753,6 @@ def _render_and_save_summary(
     f1_denom = precision + recall
     overall_f1 = (2 * precision * recall) / f1_denom if f1_denom > 0 else 0.0
     perfect_rate = perfect_docs / len(evaluations) if evaluations else 0.0
-    avg_latency = sum(e.latency_ms for e in evaluations) / len(evaluations) if evaluations else 0.0
     avg_page_acc = (
         sum(e.page_accuracy for e in evaluations) / len(evaluations) if evaluations else 0.0
     )
@@ -771,8 +774,6 @@ def _render_and_save_summary(
         "perfect_document_rate": round(perfect_rate, 4),
         "strict_null_accuracy": strict_null_acc,
         "page_grounding_accuracy": round(avg_page_acc, 4),
-        "avg_latency_ms": round(avg_latency, 2),
-        "total_benchmark_time_seconds": round(total_duration, 2),
     }
 
     with open(summary_file, "w", encoding="utf-8") as f:
@@ -793,8 +794,6 @@ def _render_and_save_summary(
     )
     results_table.add_row("Strict Nullability (Anti-Hallucination)", f"{strict_null_acc:.2%}")
     results_table.add_row("Page Grounding Accuracy", f"{avg_page_acc:.2%}")
-    results_table.add_row("Avg Document Latency", f"{avg_latency / 1000.0:.2f} s")
-    results_table.add_row("Total Execution Time", f"{total_duration:.1f} s")
 
     console.print("\n")
     console.print(results_table)
@@ -822,7 +821,7 @@ async def run_benchmark(
     dry_run: bool = False,
     resume: bool = False,
     rescore: bool = False,
-    timeout: float = 600.0,
+    timeout: float | None = None,
 ) -> None:
     """Execute the end-to-end ExtractBench benchmark suite against DocNeedle API."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1180,8 +1179,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=600.0,
-        help="HTTP request timeout in seconds per batch (default: 600.0).",
+        default=None,
+        help="HTTP request timeout in seconds per batch (default: None, no timeout limit).",
     )
     parser.add_argument(
         "--output-dir",

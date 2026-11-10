@@ -119,6 +119,13 @@ EXTRACTION_RULES = (
     "identity number ('Kimlik Numarası' or 11-digit TCKN), tax number, or registry number as a "
     "passport number. If the exact requested identification type is absent, output strictly "
     "'Not found'.\n"
+    "R-12. When multiple documents are provided, extract fields strictly from the document "
+    "type relevant to the query (e.g. commercial invoice fields from formal invoices, contract "
+    "terms from contracts). If absent from the relevant document, output strictly 'Not found'.\n"
+    "R-13. If an identity document is requested and no identity card is present, or if "
+    "governing law is requested and no court/law clause is stated, output strictly 'Not found'; "
+    "never substitute personnel names, receipt codes, or identity numbers (TCKN) into these "
+    "fields.\n"
 )
 
 CONSTRAINTS = (
@@ -336,10 +343,11 @@ def _build_schema_extraction_prompt(
         "4. For monetary values ('money') and formatted numbers, extract the full string with "
         "currency and punctuation verbatim (e.g. '25.000 TL', '$1,200.00') rather than converting "
         "to a raw integer or float.\n"
-        "5. Never substitute one identification type for another: if a passport number is "
-        "requested, extract only a designated passport number; never extract a Turkish national "
-        "identity number ('Kimlik Numarası' / TCKN) or tax number as a passport number. If absent, "
-        "output null.\n"
+        "5. Identity & legal constraints: If an official identity document (ID card, passport) "
+        "is requested and no identity card is present in context, output null; never extract "
+        "service technicians, clerks, or delivery personnel from receipts/invoices as ID holders. "
+        "Never extract an ID number (TCKN) or person name as governing_law or jurisdiction; if "
+        "a governing court or law clause is absent, output null.\n"
         "6. For boolean/checkbox fields: true if checked/marked/positive, false if unchecked/"
         "negative or if the opposing mutually exclusive option is checked, null if completely "
         "unmentioned.\n"
@@ -347,7 +355,12 @@ def _build_schema_extraction_prompt(
         "if empty.\n"
         "8. If text excerpts appear degraded or missing characters, inspect the "
         "high-resolution page image directly.\n"
-        "9. Output strictly and ONLY a raw JSON object. No code fences, no explanations."
+        "9. Multi-document isolation: When multiple documents are provided in context, "
+        "extract each field strictly from its matching document type (e.g. commercial invoice "
+        "fields from formal invoices with 'Fatura No'/'E-Arşiv', receipt fields from receipts, "
+        "contract terms from contracts). Do not prefer a receipt image over a formal invoice "
+        "when extracting invoice fields. If the relevant document type is absent, output null.\n"
+        "10. Output strictly and ONLY a raw JSON object. No code fences, no explanations."
         f"{domain_block}"
     )
 

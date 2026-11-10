@@ -33,9 +33,16 @@ class HealthHardwareInfo(BaseModel):
 
     device: str = Field(..., description="Active execution device ('cuda' or 'cpu')")
     gpu_enabled: bool = Field(..., description="Whether GPU execution is configured")
-    torch_cuda: bool | str = Field(
-        ...,
-        description="PyTorch CUDA availability flag or error description string",
+    backend: str = Field(
+        default="llama.cpp", description="Underlying GGUF inference backend engine"
+    )
+    gpu_offload_supported: bool = Field(
+        default=False,
+        description="Whether the compiled llama.cpp engine supports GPU offload",
+    )
+    cuda_runtime_detected: bool = Field(
+        default=False,
+        description="Whether CUDA runtime shared libraries were discovered on system/site-packages",
     )
     cuda_visible_devices: str | None = Field(
         default=None,
@@ -113,28 +120,35 @@ class HealthResponse(BaseModel):
     uptime_seconds: float = Field(..., description="Microservice uptime in seconds")
     process_memory_mb: float = Field(..., description="Current process resident memory (RSS) in MB")
     python_version: str = Field(..., description="Python interpreter version string")
-    free_threaded: bool = Field(
-        ...,
-        description="True if running free-threaded Python with GIL disabled (PEP 703)",
-    )
-    gil_enabled: bool = Field(
-        ...,
-        description="True if Global Interpreter Lock (GIL) is active",
-    )
     hardware: HealthHardwareInfo = Field(..., description="Hardware and GPU diagnostics")
     models: HealthModelsInfo = Field(..., description="Local GGUF models presence and size on disk")
     jobs: HealthJobsInfo = Field(..., description="Background jobs queue metrics")
     config: HealthConfigInfo = Field(..., description="Model and engine configuration")
 
 
-def check_torch_cuda_status() -> bool | str:
-    """Inspect PyTorch CUDA availability safely without crashing if PyTorch is absent."""
+def check_cuda_backend_status() -> dict[str, bool]:
+    """Inspect native llama.cpp and CUDA backend capabilities safely."""
+    supports_gpu = False
     try:
-        import torch
+        import llama_cpp
 
-        return bool(torch.cuda.is_available())
-    except Exception as exc:
-        return str(exc)
+        if hasattr(llama_cpp, "llama_supports_gpu_offload"):
+            supports_gpu = bool(llama_cpp.llama_supports_gpu_offload())
+    except Exception:
+        pass
+
+    cuda_libs_found = False
+    try:
+        from docneedle.cuda_compat import configure_cuda_library_paths
+
+        cuda_libs_found = len(configure_cuda_library_paths()) > 0
+    except Exception:
+        pass
+
+    return {
+        "gpu_offload_supported": supports_gpu,
+        "cuda_runtime_detected": cuda_libs_found,
+    }
 
 
 def _inspect_model_file(path: Path, name: str) -> ModelStatusItem:
@@ -198,7 +212,6 @@ def get_process_memory_mb() -> float:
 
 def get_system_health() -> HealthResponse:
     """Collect runtime environment, memory footprint, model files, and queue status."""
-    gil_enabled = getattr(sys, "_is_gil_enabled", lambda: True)()
     models_info = check_models_status()
 
     try:
@@ -214,6 +227,7 @@ def get_system_health() -> HealthResponse:
 
     status = "healthy" if models_info.all_ready else "degraded"
     device = "cuda" if settings.gpu_enabled else "cpu"
+    cuda_status = check_cuda_backend_status()
 
     return HealthResponse(
         status=status,
@@ -222,12 +236,12 @@ def get_system_health() -> HealthResponse:
         uptime_seconds=round(time.time() - _SERVER_START_TIME, 1),
         process_memory_mb=get_process_memory_mb(),
         python_version=sys.version,
-        free_threaded=not gil_enabled,
-        gil_enabled=gil_enabled,
         hardware=HealthHardwareInfo(
             device=device,
             gpu_enabled=settings.gpu_enabled,
-            torch_cuda=check_torch_cuda_status(),
+            backend="llama.cpp",
+            gpu_offload_supported=cuda_status["gpu_offload_supported"],
+            cuda_runtime_detected=cuda_status["cuda_runtime_detected"],
             cuda_visible_devices=os.environ.get("CUDA_VISIBLE_DEVICES"),
             spaces_zero_gpu=os.environ.get("SPACES_ZERO_GPU"),
         ),

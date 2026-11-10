@@ -809,6 +809,42 @@ SCHEMA_PRESETS: dict[str, list[dict[str, str]]] = {
     ],
 }
 
+SAMPLE_DOCS_DIR = Path(__file__).resolve().parent / "assets" / "examples"
+SAMPLE_INVOICE_PATH = SAMPLE_DOCS_DIR / "sample_commercial_invoice.pdf"
+SAMPLE_LEASE_PATH = SAMPLE_DOCS_DIR / "sample_lease_agreement.pdf"
+SAMPLE_RECEIPT_PATH = SAMPLE_DOCS_DIR / "sample_service_receipt.png"
+
+ALL_SAMPLES_SCHEMA: list[dict[str, str]] = [
+    {"key": "invoice_id", "description": "Commercial invoice number", "type": "id"},
+    {
+        "key": "monthly_rent",
+        "description": "Monthly rent amount in lease agreement",
+        "type": "money",
+    },
+    {
+        "key": "service_total",
+        "description": "Total amount paid on service receipt",
+        "type": "money",
+    },
+    {
+        "key": "contract_parties",
+        "description": "Names of participating parties in the lease agreement",
+        "type": "list",
+    },
+]
+
+
+def get_sample_document_files(mode: str = "invoice") -> list[str]:
+    """Retrieve verified absolute file paths for bundled enterprise sample documents."""
+    if mode == "all":
+        paths = [SAMPLE_INVOICE_PATH, SAMPLE_LEASE_PATH, SAMPLE_RECEIPT_PATH]
+        return [str(p) for p in paths if p.exists()]
+    if mode == "contract":
+        return [str(SAMPLE_LEASE_PATH)] if SAMPLE_LEASE_PATH.exists() else []
+    if mode == "receipt":
+        return [str(SAMPLE_RECEIPT_PATH)] if SAMPLE_RECEIPT_PATH.exists() else []
+    return [str(SAMPLE_INVOICE_PATH)] if SAMPLE_INVOICE_PATH.exists() else []
+
 
 def apply_preset_to_form_updates(
     preset_key: str,
@@ -1658,6 +1694,18 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
                     ],
                 )
 
+                with gr.Row(elem_classes=["dn-sample-btn-bar"]):
+                    load_sample_invoice_btn = gr.Button(
+                        "✨ Load Sample Invoice",
+                        elem_classes=["dn-action-btn", "dn-sample-btn"],
+                        size="sm",
+                    )
+                    load_all_samples_btn = gr.Button(
+                        "📑 Load All Samples",
+                        elem_classes=["dn-action-btn"],
+                        size="sm",
+                    )
+
                 session_chunks_state = gr.State([])
                 doc_status_view = gr.HTML(
                     value=make_status_html(
@@ -2093,6 +2141,45 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         on_documents_changed,
         inputs=[file_input],
         outputs=[doc_status_view, session_chunks_state],
+        api_name=False,
+        queue=False,
+    )
+
+    def on_load_sample_invoice() -> tuple[Any, ...]:
+        files = get_sample_document_files("invoice")
+        preset_updates = apply_preset_to_form_updates("invoice")
+        new_vis, grp_ups, q_ups, k_ups, t_ups, json_str = preset_updates
+        count = len(SCHEMA_PRESETS.get("invoice", []))
+        gr.Info(f"Loaded enterprise sample invoice with {count} schema fields.")
+        return tuple([files, new_vis] + grp_ups + q_ups + k_ups + t_ups + [json_str])
+
+    def on_load_all_samples() -> tuple[Any, ...]:
+        files = get_sample_document_files("all")
+        preset_updates = apply_items_to_form_updates(ALL_SAMPLES_SCHEMA)
+        new_vis, grp_ups, q_ups, k_ups, t_ups, json_str = preset_updates
+        if files:
+            gr.Info(f"Loaded {len(files)} enterprise sample documents across all categories.")
+        return tuple([files, new_vis] + grp_ups + q_ups + k_ups + t_ups + [json_str])
+
+    load_sample_invoice_btn.click(
+        on_load_sample_invoice,
+        outputs=[file_input, vis_state]
+        + field_groups
+        + q_inputs
+        + k_inputs
+        + t_inputs
+        + [raw_json_input],
+        api_name=False,
+        queue=False,
+    )
+    load_all_samples_btn.click(
+        on_load_all_samples,
+        outputs=[file_input, vis_state]
+        + field_groups
+        + q_inputs
+        + k_inputs
+        + t_inputs
+        + [raw_json_input],
         api_name=False,
         queue=False,
     )

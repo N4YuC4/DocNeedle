@@ -89,9 +89,53 @@ class DocNeedleQwenChatHandler(Qwen25VLChatHandler):
         "{% else %}<think>\n\n</think>\n\n{% endif %}"
     )
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        clip_model_path: str,
+        verbose: bool = True,
+        use_gpu: bool = True,
+    ) -> None:
+        super().__init__(clip_model_path=clip_model_path, verbose=verbose)
+        self.use_gpu = use_gpu
         self.enable_thinking: bool = False
+
+    def _init_mtmd_context(self, llama_model: Any) -> None:
+        self.verbose = llama_model.verbose
+        if self.mtmd_ctx is not None:
+            return
+
+        with suppress_stdout_stderr(disable=self.verbose):
+            ctx_params = self._mtmd_cpp.mtmd_context_params_default()
+            ctx_params.use_gpu = self.use_gpu
+            ctx_params.print_timings = self.verbose
+            ctx_params.n_threads = llama_model.n_threads
+            ctx_params.warmup = False
+            ctx_params.flash_attn_type = (
+                llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED
+                if (
+                    llama_model.context_params.flash_attn_type
+                    == llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED
+                )
+                else llama_cpp.LLAMA_FLASH_ATTN_TYPE_DISABLED
+            )
+
+            self.mtmd_ctx = self._mtmd_cpp.mtmd_init_from_file(
+                self.clip_model_path.encode(), llama_model.model, ctx_params
+            )
+
+            if self.mtmd_ctx is None:
+                raise ValueError(f"Failed to load mtmd context from: {self.clip_model_path}")
+
+            if not self._mtmd_cpp.mtmd_support_vision(self.mtmd_ctx):
+                raise ValueError("Vision is not supported by this model")
+
+            def mtmd_free() -> None:
+                with suppress_stdout_stderr(disable=self.verbose):
+                    if self.mtmd_ctx is not None:
+                        self._mtmd_cpp.mtmd_free(self.mtmd_ctx)
+                        self.mtmd_ctx = None
+
+            llama_model._stack.callback(mtmd_free)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         kwargs["enable_thinking"] = getattr(self, "enable_thinking", False)
@@ -101,9 +145,53 @@ class DocNeedleQwenChatHandler(Qwen25VLChatHandler):
 class DocNeedleGemma4ChatHandler(Gemma4ChatHandler):
     """Custom Gemma-4 chat handler with thinking token toggling."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        clip_model_path: str,
+        verbose: bool = True,
+        use_gpu: bool = True,
+    ) -> None:
+        super().__init__(clip_model_path=clip_model_path, verbose=verbose)
+        self.use_gpu = use_gpu
         self.enable_thinking: bool = False
+
+    def _init_mtmd_context(self, llama_model: Any) -> None:
+        self.verbose = llama_model.verbose
+        if self.mtmd_ctx is not None:
+            return
+
+        with suppress_stdout_stderr(disable=self.verbose):
+            ctx_params = self._mtmd_cpp.mtmd_context_params_default()
+            ctx_params.use_gpu = self.use_gpu
+            ctx_params.print_timings = self.verbose
+            ctx_params.n_threads = llama_model.n_threads
+            ctx_params.warmup = False
+            ctx_params.flash_attn_type = (
+                llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED
+                if (
+                    llama_model.context_params.flash_attn_type
+                    == llama_cpp.LLAMA_FLASH_ATTN_TYPE_ENABLED
+                )
+                else llama_cpp.LLAMA_FLASH_ATTN_TYPE_DISABLED
+            )
+
+            self.mtmd_ctx = self._mtmd_cpp.mtmd_init_from_file(
+                self.clip_model_path.encode(), llama_model.model, ctx_params
+            )
+
+            if self.mtmd_ctx is None:
+                raise ValueError(f"Failed to load mtmd context from: {self.clip_model_path}")
+
+            if not self._mtmd_cpp.mtmd_support_vision(self.mtmd_ctx):
+                raise ValueError("Vision is not supported by this model")
+
+            def mtmd_free() -> None:
+                with suppress_stdout_stderr(disable=self.verbose):
+                    if self.mtmd_ctx is not None:
+                        self._mtmd_cpp.mtmd_free(self.mtmd_ctx)
+                        self.mtmd_ctx = None
+
+            llama_model._stack.callback(mtmd_free)
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         kwargs["enable_thinking"] = getattr(self, "enable_thinking", False)
@@ -139,6 +227,7 @@ def create_multimodal_chat_handler(
         return DocNeedleQwenChatHandler(
             clip_model_path=str(mmproj_path),
             verbose=is_verbose,
+            use_gpu=(eff_layers != 0),
         )
 
     logger.info(

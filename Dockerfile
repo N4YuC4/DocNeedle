@@ -1,7 +1,6 @@
 FROM python:3.14-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHON_GIL=0 \
     UV_LINK_MODE=copy
 
 WORKDIR /app

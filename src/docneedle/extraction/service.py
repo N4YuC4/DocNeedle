@@ -10,6 +10,7 @@ from docneedle.extraction.matcher import (
     DEFAULT_SNIPPET_MAX_CHARS,
     SHORT_QUERY_TOKEN_THRESHOLD,
     _find_best_supporting_match,
+    _is_visual_chunk,
     _match_exact_substring,
     _match_folded_substring,
     _match_token_overlap,
@@ -76,6 +77,17 @@ def _clean_field_description(desc: str | None) -> str | None:
         if marker in primary:
             primary = primary.split(marker)[0].strip()
     return primary or desc[:200]
+
+
+def _format_chunk_context(chunk: Any) -> str:
+    """Format chunk text with clear, compact document and page boundary markers."""
+    doc_header = f"[Doküman: {chunk.doc_name}" + (
+        f" (Sayfa {chunk.page_number})]" if chunk.page_number else "]"
+    )
+    raw_text = chunk.text.strip()
+    if raw_text.startswith("[Doküman:"):
+        return raw_text
+    return f"{doc_header}\n{raw_text}"
 
 
 def _build_retrieval_query(key: str, description: str | None) -> str:
@@ -145,9 +157,15 @@ class ExtractionService:
         matches: list[SearchResult],
         expected_type: str | None,
         is_cover_query: bool = False,
+        candidate_chunks: list[Any] | None = None,
     ) -> tuple[ExtractionEvidence, float]:
         """Resolve the best supporting chunk, compute confidence score, and build evidence."""
-        best_match = _find_best_supporting_match(raw_val, matches, is_cover_query=is_cover_query)
+        best_match = _find_best_supporting_match(
+            raw_val,
+            matches,
+            is_cover_query=is_cover_query,
+            candidate_chunks=candidate_chunks,
+        )
         confidence = ConfidenceCalculator.calculate(
             found=True,
             value=raw_val,
@@ -156,7 +174,8 @@ class ExtractionService:
             expected_type=expected_type,
             has_image=bool(best_match.chunk.image_bytes),
         )
-        if best_match.chunk.image_bytes is not None:
+        is_visual_only = _is_visual_chunk(best_match.chunk)
+        if is_visual_only:
             doc_ref = best_match.chunk.doc_name
             pg = f" (Sayfa {best_match.chunk.page_number})" if best_match.chunk.page_number else ""
             val_repr = str(raw_val)[:60]
@@ -237,7 +256,7 @@ class ExtractionService:
             key=lambda c: (c.doc_name, c.page_number or 0, c.chunk_index),
         )
         context_str = settings.extraction_context_delimiter.join(
-            c.text.strip() for c in sorted_chunks
+            _format_chunk_context(c) for c in sorted_chunks
         )
         return item_matches, sorted_chunks, context_str
 
@@ -361,7 +380,7 @@ class ExtractionService:
                 key=lambda c: (c.doc_name, c.page_number or 0, c.chunk_index),
             )
             batch_context_str = settings.extraction_context_delimiter.join(
-                c.text.strip() for c in sorted_batch_chunks
+                _format_chunk_context(c) for c in sorted_batch_chunks
             )
             batch_images = self._collect_visual_page_images(store, sorted_batch_chunks)
 
@@ -407,6 +426,7 @@ class ExtractionService:
                             matches=matches,
                             expected_type=item.type,
                             is_cover_query=is_cover,
+                            candidate_chunks=sorted_batch_chunks,
                         )
                     else:
                         confidence = settings.confidence_found_score

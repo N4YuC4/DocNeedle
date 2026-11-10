@@ -112,3 +112,223 @@ class TestVisualIngestionChunks:
         assert chunk.image_bytes is not None
         assert len(chunk.image_bytes) > 0
         assert "Görsel Doküman" in chunk.text
+
+
+class TestMultiDocGroundingAndSnippetResolution:
+    """Test document context boundary tagging, visual chunk detection, and snippet resolution."""
+
+    def test_format_chunk_context_adds_boundaries(self) -> None:
+        from docneedle.extraction.service import _format_chunk_context
+
+        chunk = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="contract.pdf",
+            page_number=2,
+            chunk_index=0,
+            text="Taraflar: Sirket A ve Sirket B.",
+        )
+        formatted = _format_chunk_context(chunk)
+        assert formatted.startswith("[Doküman: contract.pdf (Sayfa 2)]\nTaraflar:")
+
+        # Avoid double-tagging if already formatted
+        already_tagged = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d1",
+            doc_name="contract.pdf",
+            chunk_index=1,
+            text="[Doküman: contract.pdf]\nSome text",
+        )
+        assert _format_chunk_context(already_tagged) == "[Doküman: contract.pdf]\nSome text"
+
+    def test_is_visual_chunk_discrimination(self) -> None:
+        from docneedle.extraction.matcher import _is_visual_chunk
+
+        # Text PDF chunk with image_bytes (rendered PDF page)
+        text_chunk = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="invoice.pdf",
+            page_number=1,
+            chunk_index=0,
+            text="Fatura No: INV-1234\nToplam Tutar: 15.000 TL\nKDV: 3.000 TL" * 5,
+            image_bytes=b"fake_jpeg_bytes",
+        )
+        assert _is_visual_chunk(text_chunk) is False
+
+        # Visual image chunk
+        img_chunk = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d2",
+            doc_name="receipt.png",
+            page_number=1,
+            chunk_index=0,
+            text="receipt > Sayfa 1\n[Görsel Doküman - receipt]",
+            image_bytes=b"fake_jpeg_bytes",
+        )
+        assert _is_visual_chunk(img_chunk) is True
+
+    def test_evidence_and_confidence_preserves_digital_text_snippets(self) -> None:
+        from docneedle.extraction.service import ExtractionService
+        from docneedle.retrieval.models import SearchResult
+
+        # Digital text PDF with image_bytes should produce text snippet, NOT "Görsel Doküman"
+        digital_chunk = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="commercial_invoice.pdf",
+            page_number=1,
+            chunk_index=0,
+            text="Fatura No: SRV-88219\nToplam Tutar: 19.200,00 TL\nTarih: 18 Ekim 2026",
+            image_bytes=b"rendered_page_bytes",
+        )
+        sr = SearchResult(chunk=digital_chunk, score=0.95)
+
+        evidence, conf = ExtractionService._create_evidence_and_confidence(
+            raw_val="SRV-88219",
+            matches=[sr],
+            expected_type="string",
+        )
+        assert evidence.document == "commercial_invoice.pdf"
+        assert evidence.page == 1
+        assert "SRV-88219" in evidence.snippet
+        assert "Görsel Doküman" not in evidence.snippet
+
+        # Visual chunk without text should produce descriptive visual snippet
+        visual_chunk = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d2",
+            doc_name="service_receipt.png",
+            page_number=1,
+            chunk_index=0,
+            text="[Görsel Doküman - service_receipt]",
+            image_bytes=b"rendered_page_bytes",
+        )
+        sr_vis = SearchResult(chunk=visual_chunk, score=0.9)
+        vis_ev, vis_conf = ExtractionService._create_evidence_and_confidence(
+            raw_val="Murat Simsek",
+            matches=[sr_vis],
+            expected_type="string",
+        )
+        assert vis_ev.document == "service_receipt.png"
+        assert "Görsel Doküman service_receipt.png (Sayfa 1) doğrudan incelendi" in vis_ev.snippet
+
+    def test_matcher_visual_chunk_fallback_when_digital_text_absent(self) -> None:
+        from docneedle.extraction.matcher import _find_best_supporting_match
+        from docneedle.retrieval.models import SearchResult
+
+        text_chunk = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="invoice.pdf",
+            page_number=1,
+            chunk_index=0,
+            text="Fatura No: INV-1234\nFirma: ABC Anonim Sirketi",
+            image_bytes=b"img",
+        )
+        vis_chunk = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d2",
+            doc_name="receipt.png",
+            page_number=1,
+            chunk_index=0,
+            text="[Görsel Doküman - receipt]",
+            image_bytes=b"img",
+        )
+
+        matches = [
+            SearchResult(chunk=text_chunk, score=0.9),
+            SearchResult(chunk=vis_chunk, score=0.8),
+        ]
+
+        # "Murat Simsek" was extracted visually from receipt.png, not in text_chunk
+        best = _find_best_supporting_match("Murat Simsek", matches)
+        assert best.chunk.doc_name == "receipt.png"
+
+    def test_schema_prompt_contains_multidoc_isolation_rule(self) -> None:
+        from docneedle.llm.prompts import _build_schema_extraction_prompt
+
+        prompt = _build_schema_extraction_prompt(
+            fields=[{"key": "test_key", "type": "string"}],
+            context="[Doküman: test.pdf]\nSome text",
+        )
+        assert "Multi-document isolation:" in prompt
+        assert "extract each field strictly from its matching document type" in prompt
+
+    def test_multilingual_iso_date_matching(self) -> None:
+        from docneedle.extraction.matcher import _find_best_supporting_match, _match_iso_date
+        from docneedle.retrieval.models import SearchResult
+
+        c1 = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="invoice.pdf",
+            chunk_index=0,
+            text="Fatura No: INV-100\nTarih: 12 Kasim 2026",
+            image_bytes=b"img",
+        )
+        c2 = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d2",
+            doc_name="lease_tr.pdf",
+            chunk_index=0,
+            text="Isbu sozlesme imza tarihi 5 Ocak 2026 olup...",
+            image_bytes=b"img",
+        )
+        c3 = DocumentChunk(
+            chunk_id="c3",
+            doc_id="d3",
+            doc_name="agreement_en.pdf",
+            chunk_index=0,
+            text="This agreement is dated January 5, 2026 by and between...",
+            image_bytes=b"img",
+        )
+        c4 = DocumentChunk(
+            chunk_id="c4",
+            doc_id="d4",
+            doc_name="vertrag_de.pdf",
+            chunk_index=0,
+            text="Der Vertrag tritt am 5. Januar 2026 in Kraft.",
+            image_bytes=b"img",
+        )
+
+        matches = [SearchResult(chunk=c1, score=0.9), SearchResult(chunk=c2, score=0.8)]
+        best = _find_best_supporting_match("2026-01-05", matches)
+        assert best.chunk.doc_name == "lease_tr.pdf"
+
+        # Verify English and German without any language-specific month lists
+        res_en = _match_iso_date("2026-01-05", [SearchResult(chunk=c3, score=0.8)])
+        assert res_en is not None and res_en.chunk.doc_name == "agreement_en.pdf"
+
+        res_de = _match_iso_date("2026-01-05", [SearchResult(chunk=c4, score=0.8)])
+        assert res_de is not None and res_de.chunk.doc_name == "vertrag_de.pdf"
+
+    def test_strict_token_overlap_rejects_spurious_number_matches(self) -> None:
+        from docneedle.extraction.matcher import _find_best_supporting_match
+        from docneedle.retrieval.models import SearchResult
+
+        # invoice has "00" and "TL", but does NOT have 19.200
+        invoice_chunk = DocumentChunk(
+            chunk_id="c1",
+            doc_id="d1",
+            doc_name="commercial_invoice.pdf",
+            chunk_index=0,
+            text="Hizmet Tutari: 115.000,00 TL\nToplam: 113.850,00 TL",
+            image_bytes=b"img",
+        )
+        receipt_chunk = DocumentChunk(
+            chunk_id="c2",
+            doc_id="d2",
+            doc_name="service_receipt.png",
+            chunk_index=0,
+            text="[Görsel Doküman - service_receipt]",
+            image_bytes=b"img",
+        )
+        matches = [
+            SearchResult(chunk=invoice_chunk, score=0.9),
+            SearchResult(chunk=receipt_chunk, score=0.8),
+        ]
+
+        # 19.200,00 TL must fall back to the visual receipt, not match invoice on "00 TL"
+        best = _find_best_supporting_match("19.200,00 TL", matches)
+        assert best.chunk.doc_name == "service_receipt.png"

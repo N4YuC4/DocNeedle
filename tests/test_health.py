@@ -4,7 +4,7 @@ from httpx import ASGITransport, AsyncClient
 from docneedle.main import (
     HealthResponse,
     app,
-    check_torch_cuda_status,
+    check_cuda_backend_status,
     create_app,
     get_system_health,
 )
@@ -30,9 +30,10 @@ async def test_healthz_endpoint() -> None:
         data = response.json()
         assert data["status"] == "healthy"
         assert data["service"] == "DocNeedle"
-        assert isinstance(data["gil_enabled"], bool)
-        assert data["free_threaded"] == (not data["gil_enabled"])
         assert "3.14" in data["python_version"]
+        assert data["hardware"]["backend"] == "llama.cpp"
+        assert isinstance(data["hardware"]["gpu_offload_supported"], bool)
+        assert isinstance(data["hardware"]["cuda_runtime_detected"], bool)
 
 
 @pytest.mark.asyncio
@@ -87,11 +88,10 @@ def test_get_system_health_model() -> None:
     assert diag.uptime_seconds >= 0.0
     assert isinstance(diag.process_memory_mb, float)
     assert diag.process_memory_mb > 0.0
-    assert isinstance(diag.free_threaded, bool)
-    assert isinstance(diag.gil_enabled, bool)
-    assert diag.free_threaded != diag.gil_enabled
     assert diag.hardware.device in ("cuda", "cpu")
-    assert diag.hardware.torch_cuda in (True, False) or isinstance(diag.hardware.torch_cuda, str)
+    assert diag.hardware.backend == "llama.cpp"
+    assert isinstance(diag.hardware.gpu_offload_supported, bool)
+    assert isinstance(diag.hardware.cuda_runtime_detected, bool)
     assert isinstance(diag.models.all_ready, bool)
     assert isinstance(diag.models.llm.ready, bool)
     assert isinstance(diag.jobs.active_jobs, int)
@@ -115,7 +115,9 @@ def test_ui_health_sync() -> None:
     assert ui_data["models"]["llm"]["size_mb"] is not None
 
 
-def test_check_torch_cuda_status_non_crashing() -> None:
-    """Verify CUDA status check returns a bool or string error without crashing."""
-    status = check_torch_cuda_status()
-    assert isinstance(status, (bool, str))
+def test_check_cuda_backend_status_non_crashing() -> None:
+    """Verify CUDA status check returns expected dictionary without crashing."""
+    status = check_cuda_backend_status()
+    assert isinstance(status, dict)
+    assert "gpu_offload_supported" in status
+    assert "cuda_runtime_detected" in status
