@@ -56,7 +56,14 @@ void * docneedle_embed_init(
     static std::once_flag init_flag;
     std::call_once(init_flag, []() {
         llama_backend_init();
-        ggml_backend_load_all();
+        Dl_info dl_info;
+        if (dladdr((void*)docneedle_embed_init, &dl_info) && dl_info.dli_fname) {
+            std::string so_path(dl_info.dli_fname);
+            std::string dir = so_path.substr(0, so_path.find_last_of("/\\"));
+            ggml_backend_load_all_from_path(dir.c_str());
+        } else {
+            ggml_backend_load_all();
+        }
     });
 
     llama_model_params mparams = llama_model_default_params();

@@ -103,30 +103,6 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
 
         preload_cuda_runtime_libs()
 
-        # Preload llama_cpp runtime libraries with RTLD_GLOBAL so libdocneedle_embed.so
-        # resolves symbols dynamically from the unified llama_cpp installation.
-        try:
-            import llama_cpp
-
-            llama_lib_dir = Path(llama_cpp.__file__).resolve().parent / "lib"
-            for base_name in (
-                "libggml.so",
-                "libggml-base.so",
-                "libllama-common.so",
-                "libllama.so",
-                "libmtmd.so",
-            ):
-                p = llama_lib_dir / base_name
-                if p.exists():
-                    ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
-            libggml = ctypes.CDLL(str(llama_lib_dir / "libggml.so"))
-            if hasattr(libggml, "ggml_backend_load_all_from_path"):
-                libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
-                libggml.ggml_backend_load_all_from_path(str(llama_lib_dir).encode("utf-8"))
-            os.environ["GGML_BACKEND_SEARCH_PATH"] = str(llama_lib_dir)
-        except Exception as e:
-            logger.warning("Could not preload llama_cpp runtime libraries: %s", e)
-
         self.n_ctx = max(4096, settings.chunker_max_tokens + 256)
 
         logger.info(
@@ -188,7 +164,8 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         self._lock = threading.Lock()
         logger.info("EmbeddingGemma-2 multimodal engine initialized successfully.")
 
-    def __del__(self) -> None:
+    def close(self) -> None:
+        """Explicitly release native C++ embedding context."""
         ctx = getattr(self, "_ctx", None)
         if ctx and hasattr(self, "_lib"):
             try:
