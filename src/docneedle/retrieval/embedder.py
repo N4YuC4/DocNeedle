@@ -24,6 +24,46 @@ def _normalize_vector(vec: np.ndarray) -> np.ndarray:
     return vec.astype(np.float32)
 
 
+def _ensure_docneedle_embed_lib(retrieval_dir: Path) -> Path:
+    """Ensure libdocneedle_embed.so exists, compiling on the fly if needed."""
+    so_path = retrieval_dir / "libdocneedle_embed.so"
+    cpp_path = retrieval_dir / "docneedle_embed.cpp"
+    if so_path.exists():
+        return so_path
+
+    import shutil
+    import subprocess
+
+    import llama_cpp
+
+    gxx = shutil.which("g++")
+    if gxx and cpp_path.exists():
+        inc_dir = Path(llama_cpp.__file__).resolve().parent.parent / "include"
+        cmd = [
+            gxx,
+            "-O3",
+            "-shared",
+            "-fPIC",
+            "-std=c++17",
+            str(cpp_path),
+            "-o",
+            str(so_path),
+            f"-I{inc_dir}",
+        ]
+        try:
+            logger.info("Compiling libdocneedle_embed.so via g++...")
+            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            if so_path.exists():
+                logger.info("Successfully compiled libdocneedle_embed.so")
+                return so_path
+        except Exception as e:
+            logger.warning("Failed auto-compiling libdocneedle_embed.so: %s", e)
+
+    if not so_path.exists():
+        raise FileNotFoundError(f"libdocneedle_embed.so native library not found in: {so_path}")
+    return so_path
+
+
 class BaseEmbedder:
     """Abstract base interface for multimodal document and query embedders."""
 
@@ -58,10 +98,41 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         self.n_gpu_layers = (
             n_gpu_layers if n_gpu_layers is not None else settings.effective_embedding_gpu_layers
         )
-        if self.n_gpu_layers != 0:
-            from docneedle.cuda_compat import preload_cuda_runtime_libs
+        from docneedle.cuda_compat import preload_cuda_runtime_libs
 
-            preload_cuda_runtime_libs()
+        preload_cuda_runtime_libs()
+
+        # Preload llama_cpp backend libraries with RTLD_GLOBAL so libdocneedle_embed.so
+        # resolves symbols dynamically from the host environment without version mismatches.
+        try:
+            import llama_cpp
+
+            lib_dir = Path(llama_cpp.__file__).resolve().parent / "lib"
+            for name in (
+                "libggml-base.so",
+                "libggml-cpu.so",
+                "libggml-cuda.so",
+                "libggml.so",
+                "libllama-common.so",
+                "libllama.so",
+                "libmtmd.so",
+            ):
+                p = lib_dir / name
+                if p.exists():
+                    try:
+                        ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
+                    except Exception:
+                        pass
+
+            libggml_path = lib_dir / "libggml.so"
+            if libggml_path.exists():
+                libggml = ctypes.CDLL(str(libggml_path), mode=ctypes.RTLD_GLOBAL)
+                if hasattr(libggml, "ggml_backend_load_all_from_path"):
+                    libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+                    libggml.ggml_backend_load_all_from_path(str(lib_dir).encode("utf-8"))
+        except Exception as e:
+            logger.debug("Failed preloading llama_cpp runtime libraries: %s", e)
+
         self.n_ctx = max(4096, settings.chunker_max_tokens + 256)
 
         logger.info(
@@ -73,9 +144,7 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         )
 
         retrieval_dir = Path(__file__).resolve().parent
-        so_path = retrieval_dir / "libdocneedle_embed.so"
-        if not so_path.exists():
-            raise FileNotFoundError(f"libdocneedle_embed.so native library not found in: {so_path}")
+        so_path = _ensure_docneedle_embed_lib(retrieval_dir)
 
         self._lib = ctypes.CDLL(str(so_path))
 
@@ -262,12 +331,24 @@ def get_embedder() -> BaseEmbedder:
                 f"EmbeddingGemma-2 vision projector (mmproj) not found at: {mmproj_path}"
             )
 
-        from docneedle.retrieval.worker import IsolatedEmbeddingClient
+        gpu_layers = settings.effective_embedding_gpu_layers
+        if settings.is_zerogpu or gpu_layers != 0:
+            # On ZeroGPU or when GPU offloading is active, run EmbeddingGemma2Embedder
+            # directly in the main process to inherit the active @spaces.GPU lease.
+            # ZeroGPU strictly blocks child subprocesses from allocating CUDA buffers.
+            _embedder_instance = EmbeddingGemma2Embedder(
+                model_path=model_path,
+                mmproj_path=mmproj_path,
+                dimension=settings.embedding_dimension,
+                n_gpu_layers=gpu_layers,
+            )
+        else:
+            from docneedle.retrieval.worker import IsolatedEmbeddingClient
 
-        _embedder_instance = IsolatedEmbeddingClient(
-            model_path=model_path,
-            mmproj_path=mmproj_path,
-            dimension=settings.embedding_dimension,
-            n_gpu_layers=settings.effective_embedding_gpu_layers,
-        )
+            _embedder_instance = IsolatedEmbeddingClient(
+                model_path=model_path,
+                mmproj_path=mmproj_path,
+                dimension=settings.embedding_dimension,
+                n_gpu_layers=0,
+            )
         return _embedder_instance

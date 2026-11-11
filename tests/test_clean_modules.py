@@ -1114,6 +1114,16 @@ reranker_n_gpu_layers = -1
         assert s.effective_embedding_gpu_layers == -1
         assert s.effective_reranker_gpu_layers == -1
 
+        # Test in ZeroGPU environment: all models (LLM, embedder, reranker) offload to GPU
+        monkeypatch.setenv("SPACES_ZERO_GPU", "true")
+        s_zerogpu = Settings()
+        assert s_zerogpu.is_zerogpu is True
+        assert s_zerogpu.gpu_enabled is True
+        assert s_zerogpu.effective_gpu_layers == -1
+        assert s_zerogpu.effective_reranker_gpu_layers == -1
+        assert s_zerogpu.effective_embedding_gpu_layers == -1
+        monkeypatch.delenv("SPACES_ZERO_GPU", raising=False)
+
         # Test with GPU disabled: all effective layers must fall back to 0 (CPU)
         test_toml_cpu = tmp_path / "config_cpu.toml"
         test_toml_cpu.write_text(

@@ -301,6 +301,11 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 10
 
     @property
+    def is_zerogpu(self) -> bool:
+        """Check if running in a Hugging Face Spaces (ZeroGPU) environment."""
+        return bool(os.environ.get("SPACES_ZERO_GPU")) or os.environ.get("SYSTEM") == "spaces"
+
+    @property
     def effective_gpu_layers(self) -> int:
         """Return LLM GPU layers offload count respecting gpu_enabled."""
         if not self.gpu_enabled:

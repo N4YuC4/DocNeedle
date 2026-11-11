@@ -29,35 +29,13 @@ def _embedder_worker_loop(
 ) -> None:
     """Worker process loop that hosts EmbeddingGemma2Embedder."""
     try:
-        import ctypes
-        from pathlib import Path
+        if n_gpu_layers and n_gpu_layers != 0:
+            try:
+                from docneedle.cuda_compat import preload_cuda_runtime_libs
 
-        try:
-            from docneedle.cuda_compat import preload_cuda_runtime_libs
-
-            preload_cuda_runtime_libs()
-        except Exception:
-            pass
-
-        retrieval_dir = Path(__file__).resolve().parent
-        for dep in (
-            "libggml-base.so",
-            "libggml-cpu.so",
-            "libggml-cuda.so",
-            "libggml_llamacpp.so",
-            "libllama-common.so.0.7.0",
-            "libllama-common.so",
-            "libllama.so",
-            "libllama.so.0",
-            "libmtmd.so",
-            "libmtmd.so.0",
-        ):
-            dep_path = retrieval_dir / dep
-            if dep_path.exists():
-                try:
-                    ctypes.CDLL(str(dep_path), mode=ctypes.RTLD_GLOBAL)
-                except Exception as lib_err:
-                    logger.debug("Optional pre-load for %s: %s", dep, lib_err)
+                preload_cuda_runtime_libs()
+            except Exception:
+                pass
 
         emb = EmbeddingGemma2Embedder(
             model_path=model_path,

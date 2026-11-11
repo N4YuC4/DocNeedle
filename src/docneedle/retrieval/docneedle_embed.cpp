@@ -1,4 +1,5 @@
 #include "llama.h"
+#include "ggml-backend.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include <cstdio>
@@ -53,6 +54,7 @@ void * docneedle_embed_init(
     int dim
 ) {
     llama_backend_init();
+    ggml_backend_load_all();
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;
