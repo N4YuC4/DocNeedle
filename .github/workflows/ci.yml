@@ -35,6 +35,11 @@ jobs:
           uv pip install pytest pytest-asyncio anyio ruff
           uv pip install --no-deps -e .
 
+      - name: Use CPU-only llama-cpp-python for CI
+        run: |
+          uv pip uninstall llama-cpp-python
+          uv pip install "llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.36/llama_cpp_python-0.3.36-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"
+
       - name: Code formatting and linting
         run: |
           uv run ruff check .
@@ -55,7 +60,7 @@ jobs:
 
       - name: Build test stage image
         run: |
-          docker build --target test -t docneedle:test .
+          docker build --build-arg INSTALL_CPU_LLAMA=true --target test -t docneedle:test .
 
       - name: Enforce zero-disk document parsing under kernel read-only rootfs
         run: |
@@ -78,8 +83,11 @@ jobs:
           touch models/embedding/dummy.gguf
 
       - name: Build and launch hardened headless container
+        env:
+          INSTALL_CPU_LLAMA: "true"
         run: |
-          docker compose -f docker-compose.prod.yml up -d --build
+          docker compose -f docker-compose.prod.yml build --build-arg INSTALL_CPU_LLAMA=true
+          docker compose -f docker-compose.prod.yml up -d
 
       - name: Verify kernel non-dumpable log in container
         run: |
