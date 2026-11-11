@@ -10,7 +10,14 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from docneedle.cuda_compat import preload_cuda_runtime_libs
+# Configure standard logging for standalone and headless microservice execution
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    stream=sys.stdout,
+)
+
+from docneedle.cuda_compat import preload_cuda_runtime_libs  # noqa: E402
 
 preload_cuda_runtime_libs()
 
