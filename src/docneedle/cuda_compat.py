@@ -73,14 +73,12 @@ def configure_cuda_library_paths() -> list[Path]:
         if torch_lib.is_dir():
             search_dirs.append(torch_lib)
 
-    # 3. Probe standard system library directories
+    # 3. Probe standard system CUDA directories
     for sys_dir in (
         "/usr/local/cuda/lib64",
         "/usr/local/cuda-13/lib64",
         "/usr/local/cuda-12/lib64",
         "/usr/local/nvidia/lib64",
-        "/usr/lib/x86_64-linux-gnu",
-        "/usr/local/lib",
     ):
         p = Path(sys_dir)
         if p.is_dir():
