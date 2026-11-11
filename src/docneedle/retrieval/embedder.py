@@ -102,36 +102,37 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
 
         preload_cuda_runtime_libs()
 
-        # Preload llama_cpp backend libraries with RTLD_GLOBAL so libdocneedle_embed.so
+        # Preload llama.cpp runtime backend libraries with RTLD_GLOBAL so libdocneedle_embed.so
         # resolves symbols dynamically from the host environment without version mismatches.
+        retrieval_dir = Path(__file__).resolve().parent
+        candidate_dirs = [retrieval_dir]
         try:
             import llama_cpp
 
-            lib_dir = Path(llama_cpp.__file__).resolve().parent / "lib"
-            for name in (
-                "libggml-base.so",
-                "libggml-cpu.so",
-                "libggml-cuda.so",
-                "libggml.so",
-                "libllama-common.so",
-                "libllama.so",
-                "libmtmd.so",
-            ):
-                p = lib_dir / name
-                if p.exists():
-                    try:
-                        ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
-                    except Exception:
-                        pass
+            candidate_dirs.append(Path(llama_cpp.__file__).resolve().parent / "lib")
+        except Exception:
+            pass
 
-            libggml_path = lib_dir / "libggml.so"
-            if libggml_path.exists():
-                libggml = ctypes.CDLL(str(libggml_path), mode=ctypes.RTLD_GLOBAL)
-                if hasattr(libggml, "ggml_backend_load_all_from_path"):
-                    libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
-                    libggml.ggml_backend_load_all_from_path(str(lib_dir).encode("utf-8"))
-        except Exception as e:
-            logger.debug("Failed preloading llama_cpp runtime libraries: %s", e)
+        for d in candidate_dirs:
+            if (d / "libllama.so").exists():
+                for name in (
+                    "libggml-base.so",
+                    "libggml-cpu.so",
+                    "libggml-cuda.so",
+                    "libggml_llamacpp.so",
+                    "libggml.so",
+                    "libllama-common.so.0.7.0",
+                    "libllama-common.so",
+                    "libllama.so",
+                    "libmtmd.so",
+                ):
+                    p = d / name
+                    if p.exists():
+                        try:
+                            ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
+                        except Exception:
+                            pass
+                break
 
         self.n_ctx = max(4096, settings.chunker_max_tokens + 256)
 

@@ -53,8 +53,11 @@ void * docneedle_embed_init(
     int n_threads,
     int dim
 ) {
-    llama_backend_init();
-    ggml_backend_load_all();
+    static std::once_flag init_flag;
+    std::call_once(init_flag, []() {
+        llama_backend_init();
+        ggml_backend_load_all();
+    });
 
     llama_model_params mparams = llama_model_default_params();
     mparams.n_gpu_layers = n_gpu_layers;
@@ -87,16 +90,7 @@ void * docneedle_embed_init(
     cparams.n_threads = actual_threads;
     cparams.n_threads_batch = actual_threads;
 
-    // Bridge struct ABI shift between header (160 bytes, offset 128) and
-    // runtime libllama.so (168 bytes, offset 136). Setting both offsets ensures
-    // embeddings are enabled regardless of llama.cpp version.
-    unsigned char cparams_buf[256];
-    std::memset(cparams_buf, 0, sizeof(cparams_buf));
-    std::memcpy(cparams_buf, &cparams, sizeof(cparams));
-    cparams_buf[128] = 1;
-    cparams_buf[136] = 1;
-
-    llama_context * lctx = llama_init_from_model(model, *(llama_context_params*)cparams_buf);
+    llama_context * lctx = llama_init_from_model(model, cparams);
     if (!lctx) {
         llama_model_free(model);
         return nullptr;
