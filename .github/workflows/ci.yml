@@ -24,18 +24,20 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
+        env:
+          CMAKE_ARGS: "-DGGML_CUDA=off"
         run: |
           uv pip install --system -r requirements.txt || uv pip install --system .
           uv pip install --system pytest pytest-asyncio anyio ruff
 
       - name: Code formatting and linting
         run: |
-          uv run ruff check .
-          uv run ruff format --check .
+          ruff check .
+          ruff format --check .
 
       - name: Run fast unit test suite (156 tests, kernel hardening & zero-disk)
         run: |
-          uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_collision_turkish.py tests/test_acroform.py tests/test_ui_schema_sync.py tests/test_health.py tests/test_speculative.py tests/test_cuda_compat.py tests/test_ingest.py tests/test_ocr_grounding.py tests/test_zero_disk.py -v
+          pytest tests/test_clean_modules.py tests/test_collision.py tests/test_collision_turkish.py tests/test_acroform.py tests/test_ui_schema_sync.py tests/test_health.py tests/test_speculative.py tests/test_cuda_compat.py tests/test_ingest.py tests/test_ocr_grounding.py tests/test_zero_disk.py -v
 
   container-zero-disk-enforcement:
     runs-on: ubuntu-latest
@@ -74,8 +76,15 @@ jobs:
 
       - name: Verify kernel non-dumpable log in container
         run: |
-          sleep 5
-          docker logs docneedle-api 2>&1 | grep "PR_SET_DUMPABLE=0"
+          for i in {1..30}; do
+            if docker logs docneedle-api 2>&1 | grep "PR_SET_DUMPABLE=0"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: Timed out waiting for PR_SET_DUMPABLE=0 log in container"
+          docker logs docneedle-api
+          exit 1
 
       - name: Verify health endpoint under read-only rootfs
         run: |
