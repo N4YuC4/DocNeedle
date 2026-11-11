@@ -109,10 +109,15 @@ def configure_cuda_library_paths() -> list[Path]:
     # Export discovered directories to LD_LIBRARY_PATH for child processes or dynamic lookups
     if unique_dirs:
         curr_ld = os.environ.get("LD_LIBRARY_PATH", "")
-        new_entries = [str(d) for d in unique_dirs if str(d) not in curr_ld.split(":")]
+        custom_dirs = [
+            str(d)
+            for d in unique_dirs
+            if str(d) not in ("/usr/lib/x86_64-linux-gnu", "/usr/local/lib", "/lib", "/usr/lib")
+        ]
+        new_entries = [d for d in custom_dirs if d not in curr_ld.split(":")]
         if new_entries:
-            os.environ["LD_LIBRARY_PATH"] = ":".join(new_entries) + (
-                f":{curr_ld}" if curr_ld else ""
+            os.environ["LD_LIBRARY_PATH"] = (f"{curr_ld}:" if curr_ld else "") + ":".join(
+                new_entries
             )
 
     return unique_dirs
