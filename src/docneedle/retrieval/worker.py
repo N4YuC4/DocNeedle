@@ -14,6 +14,7 @@ from typing import Any
 
 import numpy as np
 
+from docneedle.config import settings
 from docneedle.retrieval.embedder import BaseEmbedder, EmbeddingGemma2Embedder
 
 logger = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ def _embedder_worker_loop(
             model_path=model_path,
             mmproj_path=mmproj_path,
             dimension=dimension,
-            n_gpu_layers=n_gpu_layers or 0,
+            n_gpu_layers=0 if n_gpu_layers is None else n_gpu_layers,
         )
         pipe.send(("READY", None))
     except Exception as e:
@@ -106,7 +107,9 @@ class IsolatedEmbeddingClient(BaseEmbedder):
         self.model_path = str(model_path)
         self.mmproj_path = str(mmproj_path)
         self.dimension = dimension
-        self.n_gpu_layers = n_gpu_layers
+        self.n_gpu_layers = (
+            n_gpu_layers if n_gpu_layers is not None else settings.effective_embedding_gpu_layers
+        )
         self._lock = threading.Lock()
         self._proc: mp.Process | None = None
         self._pipe: Any = None

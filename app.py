@@ -1695,11 +1695,6 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
                 )
 
                 with gr.Row(elem_classes=["dn-sample-btn-bar"]):
-                    load_sample_invoice_btn = gr.Button(
-                        "✨ Load Sample Invoice",
-                        elem_classes=["dn-action-btn", "dn-sample-btn"],
-                        size="sm",
-                    )
                     load_all_samples_btn = gr.Button(
                         "📑 Load All Samples",
                         elem_classes=["dn-action-btn"],
@@ -2145,41 +2140,16 @@ with gr.Blocks(title="DocNeedle - Document Extraction") as demo:
         queue=False,
     )
 
-    def on_load_sample_invoice() -> tuple[Any, ...]:
-        files = get_sample_document_files("invoice")
-        preset_updates = apply_preset_to_form_updates("invoice")
-        new_vis, grp_ups, q_ups, k_ups, t_ups, json_str = preset_updates
-        count = len(SCHEMA_PRESETS.get("invoice", []))
-        gr.Info(f"Loaded enterprise sample invoice with {count} schema fields.")
-        return tuple([files, new_vis] + grp_ups + q_ups + k_ups + t_ups + [json_str])
-
-    def on_load_all_samples() -> tuple[Any, ...]:
+    def on_load_all_samples() -> tuple[list[str], str, list[Any]]:
         files = get_sample_document_files("all")
-        preset_updates = apply_items_to_form_updates(ALL_SAMPLES_SCHEMA)
-        new_vis, grp_ups, q_ups, k_ups, t_ups, json_str = preset_updates
         if files:
-            gr.Info(f"Loaded {len(files)} enterprise sample documents across all categories.")
-        return tuple([files, new_vis] + grp_ups + q_ups + k_ups + t_ups + [json_str])
+            gr.Info(f"Loaded {len(files)} enterprise sample documents.")
+        status_html, empty_chunks = on_documents_changed(files)
+        return files, status_html, empty_chunks
 
-    load_sample_invoice_btn.click(
-        on_load_sample_invoice,
-        outputs=[file_input, vis_state]
-        + field_groups
-        + q_inputs
-        + k_inputs
-        + t_inputs
-        + [raw_json_input],
-        api_name=False,
-        queue=False,
-    )
     load_all_samples_btn.click(
         on_load_all_samples,
-        outputs=[file_input, vis_state]
-        + field_groups
-        + q_inputs
-        + k_inputs
-        + t_inputs
-        + [raw_json_input],
+        outputs=[file_input, doc_status_view, session_chunks_state],
         api_name=False,
         queue=False,
     )

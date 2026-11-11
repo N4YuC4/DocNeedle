@@ -55,7 +55,9 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         self.model_path = str(model_path)
         self.mmproj_path = str(mmproj_path)
         self.dimension = dimension if dimension is not None else settings.embedding_dimension
-        self.n_gpu_layers = n_gpu_layers if n_gpu_layers is not None else 0
+        self.n_gpu_layers = (
+            n_gpu_layers if n_gpu_layers is not None else settings.effective_embedding_gpu_layers
+        )
         if self.n_gpu_layers != 0:
             from docneedle.cuda_compat import preload_cuda_runtime_libs
 
@@ -266,6 +268,6 @@ def get_embedder() -> BaseEmbedder:
             model_path=model_path,
             mmproj_path=mmproj_path,
             dimension=settings.embedding_dimension,
-            n_gpu_layers=0,
+            n_gpu_layers=settings.effective_embedding_gpu_layers,
         )
         return _embedder_instance

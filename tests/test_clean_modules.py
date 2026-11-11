@@ -1091,6 +1091,47 @@ gpu_enabled = true
         assert s.host == "127.0.0.1"
         assert s.gpu_enabled is True
 
+    def test_gpu_layers_configuration_and_properties(self, monkeypatch, tmp_path) -> None:
+        from docneedle.config import Settings
+
+        test_toml = tmp_path / "config.toml"
+        test_toml.write_text(
+            """
+[hardware]
+gpu_enabled = true
+llm_n_gpu_layers = -1
+embedding_n_gpu_layers = -1
+reranker_n_gpu_layers = -1
+"""
+        )
+        monkeypatch.setenv("CONFIG_TOML", str(test_toml))
+        s = Settings()
+        assert s.gpu_enabled is True
+        assert s.llm_n_gpu_layers == -1
+        assert s.embedding_n_gpu_layers == -1
+        assert s.reranker_n_gpu_layers == -1
+        assert s.effective_gpu_layers == -1
+        assert s.effective_embedding_gpu_layers == -1
+        assert s.effective_reranker_gpu_layers == -1
+
+        # Test with GPU disabled: all effective layers must fall back to 0 (CPU)
+        test_toml_cpu = tmp_path / "config_cpu.toml"
+        test_toml_cpu.write_text(
+            """
+[hardware]
+gpu_enabled = false
+llm_n_gpu_layers = -1
+embedding_n_gpu_layers = -1
+reranker_n_gpu_layers = -1
+"""
+        )
+        monkeypatch.setenv("CONFIG_TOML", str(test_toml_cpu))
+        s_cpu = Settings()
+        assert s_cpu.gpu_enabled is False
+        assert s_cpu.effective_gpu_layers == 0
+        assert s_cpu.effective_embedding_gpu_layers == 0
+        assert s_cpu.effective_reranker_gpu_layers == 0
+
 
 class TestRefactoredParserAndEmbedderHelpers:
     """Test newly extracted pure helpers in parser, ocr_engine, and embedder."""

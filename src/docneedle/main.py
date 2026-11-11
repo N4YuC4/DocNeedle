@@ -102,6 +102,13 @@ class HealthConfigInfo(BaseModel):
         description="Whether cross-encoder reranker is enabled by default",
     )
     gpu_enabled: bool = Field(..., description="Whether GPU inference is requested")
+    llm_n_gpu_layers: int = Field(default=-1, description="Configured GPU layers for LLM")
+    embedding_n_gpu_layers: int = Field(
+        default=-1, description="Configured GPU layers for embedding model"
+    )
+    reranker_n_gpu_layers: int = Field(
+        default=-1, description="Configured GPU layers for reranker model"
+    )
     cpu_threads: int = Field(..., description="Configured CPU worker threads")
     max_upload_size_mb: int = Field(..., description="Maximum single file upload limit in MB")
     max_total_upload_size_mb: int = Field(..., description="Maximum total payload size in MB")
@@ -256,6 +263,9 @@ def get_system_health() -> HealthResponse:
             multimodal_llm=True,
             reranker_enabled=settings.reranker_enabled,
             gpu_enabled=settings.gpu_enabled,
+            llm_n_gpu_layers=settings.effective_gpu_layers,
+            embedding_n_gpu_layers=settings.effective_embedding_gpu_layers,
+            reranker_n_gpu_layers=settings.effective_reranker_gpu_layers,
             cpu_threads=settings.cpu_threads,
             max_upload_size_mb=settings.max_upload_size_mb,
             max_total_upload_size_mb=settings.max_total_upload_size_mb,

@@ -373,3 +373,23 @@ def test_get_sample_document_files():
     assert any("sample_commercial_invoice.pdf" in f for f in all_files)
     assert any("sample_lease_agreement.pdf" in f for f in all_files)
     assert any("sample_service_receipt.png" in f for f in all_files)
+
+
+def test_load_all_samples_button_configuration():
+    import app
+    from app import demo, doc_status_view, file_input, load_all_samples_btn, session_chunks_state
+
+    # Verify load_sample_invoice_btn was removed and only load_all_samples_btn remains
+    assert not hasattr(app, "load_sample_invoice_btn")
+    assert load_all_samples_btn.value == "📑 Load All Samples"
+
+    # Verify click handler outputs ONLY target documents/status, NOT query/schema fields
+    btn_fns = [
+        fn
+        for fn in demo.fns.values()
+        if any(t[0] == load_all_samples_btn._id for t in getattr(fn, "targets", []))
+    ]
+    assert len(btn_fns) == 1
+    fn = btn_fns[0]
+    expected_outputs = {file_input, doc_status_view, session_chunks_state}
+    assert set(fn.outputs) == expected_outputs

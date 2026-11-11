@@ -81,8 +81,10 @@ class Qwen3Reranker:
     def __init__(
         self,
         model_path: str | Path | None = None,
-        n_gpu_layers: int = 0,
+        n_gpu_layers: int | None = None,
     ) -> None:
+        if n_gpu_layers is None:
+            n_gpu_layers = settings.effective_reranker_gpu_layers
         if n_gpu_layers != 0:
             from docneedle.cuda_compat import preload_cuda_runtime_libs
 

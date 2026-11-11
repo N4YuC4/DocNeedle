@@ -1,15 +1,15 @@
 {
   "benchmark": "ExtractBench",
   "split": "medium",
-  "timestamp": "2026-11-10T17:17:55.955776+00:00",
+  "timestamp": "2026-11-11T03:20:04.585657+00:00",
   "total_documents": 98,
   "total_fields": 2808,
-  "matched_fields": 2160,
-  "unified_value_f1": 0.6985,
-  "value_precision": 0.7948,
-  "value_recall": 0.6231,
+  "matched_fields": 2153,
+  "unified_value_f1": 0.697,
+  "value_precision": 0.7943,
+  "value_recall": 0.621,
   "perfect_documents": 1,
   "perfect_document_rate": 0.0102,
-  "strict_null_accuracy": 0.8466,
-  "page_grounding_accuracy": 0.638
+  "strict_null_accuracy": 0.8462,
+  "page_grounding_accuracy": 0.6214
 }

@@ -44,9 +44,17 @@ cors_origins = [
 # TR: CUDA GPU hızlandırmasını etkinleştirir (HF Spaces ZeroGPU'da veya GPU_ENABLED ile otomatik algılanır)
 gpu_enabled = true
 
-# EN: Number of neural model layers offloaded to GPU (-1 offloads all layers; 0 keeps execution on CPU)
-# TR: GPU'ya aktarılacak model katmanı sayısı (-1 tüm katmanları GPU'ya aktarır; 0 tamamen CPU'da çalıştırır)
+# EN: Number of neural model layers offloaded to GPU for LLM (-1 offloads all layers; 0 keeps on CPU)
+# TR: LLM için GPU'ya aktarılacak model katmanı sayısı (-1 tüm katmanları GPU'ya aktarır; 0 CPU'da tutar)
 llm_n_gpu_layers = -1
+
+# EN: Number of GPU layers offloaded for the multimodal embedding model (-1 offloads all layers; 0 keeps on CPU)
+# TR: Çok modlu gömme modeli (EmbeddingGemma-2) için GPU'ya aktarılacak katman sayısı (-1 tüm katmanlar; 0 CPU)
+embedding_n_gpu_layers = -1
+
+# EN: Number of GPU layers offloaded for the cross-encoder reranker (-1 offloads all layers; 0 keeps on CPU)
+# TR: Çapraz kodlayıcı reranker (Qwen3-Reranker) için GPU'ya aktarılacak katman sayısı (-1 tüm katmanlar; 0 CPU)
+reranker_n_gpu_layers = -1
 
 # EN: Logical batch token count processed simultaneously by llama.cpp during prompt evaluation
 # TR: Prompt işleme sırasında llama.cpp tarafından aynı anda işlenen mantıksal token (batch) sayısı
@@ -66,7 +74,7 @@ model_kv_cache_type_k = 1
 
 # EN: Quantization data type for the LLM value cache (1 = GGML_TYPE_F16, standard stable FP16 KV cache)
 # TR: LLM value önbelleği kuantizasyon türü (1 = GGML_TYPE_F16, standart kararlı FP16 KV önbelleği)
-model_kv_cache_type_v = 1
+model_kv_cache_type_v = 8
 
 # EN: Enable FlashAttention in llama.cpp (accelerates prompt eval on GPU with FP16 KV cache)
 # TR: llama.cpp FlashAttention desteği (FP16 KV önbellek ile GPU'da prompt işlemesini hızlandırır)
@@ -169,9 +177,9 @@ top_k = 10
 # TR: Yoğun ve seyrek skorları dengelemek için RRF sıralamasına eklenen yumuşatma sabiti (k=60)
 rrf_constant = 60
 
-# EN: Enable neural cross-encoder reranking (disabled by default on CPU to maintain low latency)
-# TR: Sinirsel çapraz kodlayıcı ile yeniden sıralama (düşük gecikme için CPU'da varsayılan olarak kapalıdır)
-reranker_enabled = false
+# EN: Enable neural cross-encoder reranking (accelerated on GPU)
+# TR: Sinirsel çapraz kodlayıcı ile yeniden sıralama (GPU üzerinde hızlandırılmış)
+reranker_enabled = true
 
 # EN: Hugging Face model identifier for the local Qwen3-Reranker cross-encoder model
 # TR: Yerel Qwen3-Reranker çapraz kodlayıcı modeli için Hugging Face model kimliği

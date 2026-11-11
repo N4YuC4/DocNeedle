@@ -225,7 +225,7 @@ class Settings(BaseSettings):
     retrieval_top_k: int = 10
     rrf_constant: int = 60
     reranker_enabled: bool = Field(
-        default_factory=lambda: os.environ.get("RERANKER_ENABLED", "").lower() in ("1", "true")
+        default_factory=lambda: os.environ.get("RERANKER_ENABLED", "true").lower() in ("1", "true")
     )
     reranker_model: str = "Qwen/Qwen3-Reranker-0.6B"
     reranker_candidate_k: int = 4
@@ -282,7 +282,9 @@ class Settings(BaseSettings):
             or False
         )
     )
-    llm_n_gpu_layers: int = 0
+    llm_n_gpu_layers: int = -1
+    embedding_n_gpu_layers: int = -1
+    reranker_n_gpu_layers: int = -1
     cpu_threads: int = Field(default_factory=_default_cpu_threads)
     cpu_threads_batch: int = Field(default_factory=_default_cpu_threads_batch)
     model_n_batch: int = 256
@@ -300,10 +302,24 @@ class Settings(BaseSettings):
 
     @property
     def effective_gpu_layers(self) -> int:
-        """Return -1 for full GPU offload if enabled, else 0 for CPU execution."""
+        """Return LLM GPU layers offload count respecting gpu_enabled."""
         if not self.gpu_enabled:
             return 0
-        return self.llm_n_gpu_layers if self.llm_n_gpu_layers != 0 else -1
+        return self.llm_n_gpu_layers
+
+    @property
+    def effective_embedding_gpu_layers(self) -> int:
+        """Return embedding model GPU layers offload count respecting gpu_enabled."""
+        if not self.gpu_enabled:
+            return 0
+        return self.embedding_n_gpu_layers
+
+    @property
+    def effective_reranker_gpu_layers(self) -> int:
+        """Return reranker model GPU layers offload count respecting gpu_enabled."""
+        if not self.gpu_enabled:
+            return 0
+        return self.reranker_n_gpu_layers
 
 
 settings = Settings()
