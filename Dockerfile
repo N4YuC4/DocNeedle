@@ -34,7 +34,7 @@ COPY app.py /app/app.py
 # Optional build arg for CPU-only environments (e.g. CI runners lacking NVIDIA GPU drivers)
 ARG INSTALL_CPU_LLAMA=false
 RUN if [ "$INSTALL_CPU_LLAMA" = "true" ]; then \
-        uv pip uninstall llama-cpp-python && \
+        uv pip uninstall --system llama-cpp-python && \
         uv pip install --system "llama-cpp-python @ https://github.com/abetlen/llama-cpp-python/releases/download/v0.3.36/llama_cpp_python-0.3.36-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl"; \
     fi
 
