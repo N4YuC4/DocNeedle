@@ -300,8 +300,7 @@ class JobManager:
         asynchronously.
         """
         ingestion_service = IngestionService()
-        extraction_service = ExtractionService()
-        store = SessionVectorStore()
+        store: SessionVectorStore | None = None
 
         try:
             total_queries = len(items)
@@ -334,6 +333,9 @@ class JobManager:
                     job_id, "Could not extract any readable text from the uploaded documents."
                 )
                 return
+
+            extraction_service = ExtractionService()
+            store = SessionVectorStore()
 
             await self.update_progress(
                 job_id=job_id,
@@ -386,7 +388,8 @@ class JobManager:
 
         finally:
             # Guarantee zero-disk privacy: strictly purge all RAM vectors and chunks
-            store.clear()
+            if store is not None:
+                store.clear()
 
 
 # Global singleton instance

@@ -67,8 +67,7 @@ def _sync_extract_session(
     request_start = time.perf_counter()
     items = [ExtractionItemQuery.model_validate(it) for it in items_dicts]
     ingestion_service = IngestionService()
-    extraction_service = ExtractionService()
-    store = SessionVectorStore()
+    store: SessionVectorStore | None = None
 
     try:
         filenames = [fname for fname, _ in files_data]
@@ -100,6 +99,8 @@ def _sync_extract_session(
                 detail="Could not extract any readable text from the uploaded documents.",
             )
 
+        extraction_service = ExtractionService()
+        store = SessionVectorStore()
         logger.info(
             f"--> Indexing {len(all_chunks)} chunks into vector store & building BM25 index..."
         )
@@ -136,7 +137,8 @@ def _sync_extract_session(
 
     finally:
         # Guarantee privacy: wipe RAM vectors and chunks immediately after completion
-        store.clear()
+        if store is not None:
+            store.clear()
 
 
 @router.post("/extract", response_model=ExtractionResponse)

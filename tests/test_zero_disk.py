@@ -228,3 +228,36 @@ class TestZeroDiskParser:
         assert doc is not None
         assert 1 in images
         assert len(images[1]) > 0
+
+
+class TestApiFailFastUnsupportedFormats:
+    """Validate that API endpoints reject unsupported files immediately with HTTP 415."""
+
+    def test_api_extract_rejects_unsupported_extension_with_415(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from docneedle.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/v1/extract",
+            files={"files": ("Dockerfile", b"FROM python:3.14-slim\n", "application/octet-stream")},
+            data={"schema": '[{"key": "title", "description": "test"}]'},
+        )
+        assert response.status_code == 415
+        assert "Unsupported document format '' for file 'Dockerfile'" in response.json()["detail"]
+
+    def test_api_jobs_rejects_unsupported_extension_with_415(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from docneedle.main import app
+
+        client = TestClient(app)
+        response = client.post(
+            "/v1/jobs",
+            files={"files": ("malware.exe", b"\x4d\x5a\x90\x00", "application/octet-stream")},
+            data={"schema": '[{"key": "title", "description": "test"}]'},
+        )
+        assert response.status_code == 415
+        detail = response.json()["detail"]
+        assert "Unsupported document format '.exe' for file 'malware.exe'" in detail

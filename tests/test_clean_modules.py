@@ -1277,9 +1277,9 @@ class TestApiValidationHelpers:
         # Three 35MB files (each under 50MB per-file limit, but 105MB > 100MB total limit)
         part_size = 35 * BYTES_PER_MEGABYTE
         files = [
-            UploadFile(filename="part1.bin", file=io.BytesIO(b"x" * part_size)),
-            UploadFile(filename="part2.bin", file=io.BytesIO(b"y" * part_size)),
-            UploadFile(filename="part3.bin", file=io.BytesIO(b"z" * part_size)),
+            UploadFile(filename="part1.pdf", file=io.BytesIO(b"x" * part_size)),
+            UploadFile(filename="part2.pdf", file=io.BytesIO(b"y" * part_size)),
+            UploadFile(filename="part3.pdf", file=io.BytesIO(b"z" * part_size)),
         ]
         with pytest.raises(HTTPException) as exc_info:
             await read_and_validate_uploads(files)

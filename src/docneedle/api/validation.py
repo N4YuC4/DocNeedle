@@ -1,12 +1,14 @@
 """Request validation and parsing utilities for DocNeedle API endpoints."""
 
 import json
+from pathlib import Path
 from typing import Any, Final
 
 from fastapi import HTTPException, UploadFile
 
 from docneedle.config import settings
 from docneedle.extraction.schemas import ExtractionItemQuery
+from docneedle.ingest.parser import SUPPORTED_DOCUMENT_EXTENSIONS
 
 BYTES_PER_MEGABYTE: Final[int] = 1024 * 1024
 
@@ -119,6 +121,16 @@ async def read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str, 
 
     files_data: list[tuple[str, bytes]] = []
     for upload in files:
+        filename = upload.filename or "uploaded_document"
+        sfx = Path(filename).suffix.lower()
+        if not sfx or sfx not in SUPPORTED_DOCUMENT_EXTENSIONS:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    f"Unsupported document format '{sfx}' for file '{filename}'. "
+                    f"Supported extensions: {sorted(SUPPORTED_DOCUMENT_EXTENSIONS)}"
+                ),
+            )
         content = await upload.read()
         total_bytes += len(content)
         if max_total_bytes > 0 and total_bytes > max_total_bytes:
@@ -129,7 +141,6 @@ async def read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str, 
                     f"{settings.max_total_upload_size_mb} MB."
                 ),
             )
-        filename = upload.filename or "uploaded_document"
         validate_file_size(filename, content, max_file_bytes)
         files_data.append((filename, content))
     return files_data
