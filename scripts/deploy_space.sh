@@ -61,6 +61,9 @@ hf upload "$SPACE_ID" . . --repo-type space \
   --exclude ".python-version" \
   --exclude "**/.fuse_hidden*" \
   --exclude "README.md.hf_bak" \
+  --delete "src/docneedle/retrieval/libggml*" \
+  --delete "src/docneedle/retrieval/libllama*" \
+  --delete "src/docneedle/retrieval/libmtmd*" \
   --commit-message "$COMMIT_MSG"
 
 restore_readme
