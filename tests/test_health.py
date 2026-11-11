@@ -2,12 +2,33 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from docneedle.main import (
+    HealthModelsInfo,
     HealthResponse,
+    ModelStatusItem,
     app,
     check_cuda_backend_status,
     create_app,
     get_system_health,
 )
+
+
+@pytest.fixture
+def models_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock local model file existence for weight-free CI test runners."""
+    from docneedle import main as m
+
+    def fake_check_models_status() -> HealthModelsInfo:
+        item = ModelStatusItem(name="mock.gguf", ready=True, size_mb=123.4)
+        return HealthModelsInfo(
+            all_ready=True,
+            llm=item,
+            llm_mmproj=item,
+            embedding=item,
+            embedding_mmproj=item,
+            reranker=item,
+        )
+
+    monkeypatch.setattr(m, "check_models_status", fake_check_models_status)
 
 
 @pytest.mark.asyncio
@@ -22,7 +43,7 @@ async def test_root_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_healthz_endpoint() -> None:
+async def test_healthz_endpoint(models_ready) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/healthz")
@@ -37,7 +58,36 @@ async def test_healthz_endpoint() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_alias_endpoint() -> None:
+async def test_healthz_endpoint_degraded_when_models_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify endpoint explicitly signals degraded status when weights are absent."""
+    from docneedle import main as m
+
+    def fake_check_missing_models() -> HealthModelsInfo:
+        item = ModelStatusItem(name="mock.gguf", ready=False, size_mb=None)
+        return HealthModelsInfo(
+            all_ready=False,
+            llm=item,
+            llm_mmproj=item,
+            embedding=item,
+            embedding_mmproj=item,
+            reranker=item,
+        )
+
+    monkeypatch.setattr(m, "check_models_status", fake_check_missing_models)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/healthz")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "degraded"
+        assert data["models"]["all_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_health_alias_endpoint(models_ready) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/health")
@@ -100,7 +150,7 @@ def test_get_system_health_model() -> None:
     assert diag.config.cpu_threads > 0
 
 
-def test_ui_health_sync() -> None:
+def test_ui_health_sync(models_ready) -> None:
     """Verify app.py check_system_health synchronizes dynamically with get_system_health."""
     from app import check_system_health
 
