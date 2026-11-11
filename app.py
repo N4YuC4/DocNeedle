@@ -65,6 +65,7 @@ except Exception as e:
 import gradio as gr  # noqa: E402
 
 from docneedle.config import settings  # noqa: E402
+from docneedle.hardening import harden_process  # noqa: E402
 
 logger = logging.getLogger("DocNeedleSpace")
 logging.basicConfig(level=logging.INFO)
@@ -2232,6 +2233,9 @@ gradio_app.add_api_route("/healthz", health_check, methods=["GET"])
 gradio_app.add_api_route("/health", health_check, methods=["GET"])
 
 if __name__ == "__main__":
+    # Enforce kernel-level non-dumpable memory protection to prevent core dump leaks
+    harden_process()
+
     port = int(os.environ.get("PORT", 7860))
     logger.info(f"--> [STARTUP] Starting DocNeedle on 0.0.0.0:{port}...")
     res = demo.launch(

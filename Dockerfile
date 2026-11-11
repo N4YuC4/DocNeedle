@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.14-slim AS prod
 
 ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy
@@ -34,6 +34,10 @@ COPY app.py /app/app.py
 # Install docneedle package itself without re-fetching dependencies
 RUN uv pip install --system --no-deps .
 
+# Pre-bake Hugging Face tokenizer cache into image layer for air-gapped offline execution
+ENV HF_HOME=/app/hf-cache
+RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen3-Reranker-0.6B')"
+
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
@@ -41,3 +45,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
 
 # Start unified Gradio UI + FastAPI backend
 CMD ["python", "app.py"]
+
+# ==============================================================================
+# Dedicated test stage for container-enforced read-only rootfs validation in CI
+# ==============================================================================
+FROM prod AS test
+COPY tests /app/tests
+RUN uv pip install --system pytest pytest-asyncio anyio
+ENV PYTHONDONTWRITEBYTECODE=1
+CMD ["python", "-m", "pytest", "tests/test_zero_disk.py", "-v", "-p", "no:cacheprovider", "-o", "cache_dir=/tmp/.pytest_cache"]

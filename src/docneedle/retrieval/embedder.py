@@ -6,7 +6,6 @@ and raw image documents in the same cross-modal vector space.
 
 import ctypes
 import logging
-import os
 import threading
 from pathlib import Path
 

@@ -7,8 +7,6 @@ visual page chunks with raw image bytes in memory for multimodal retrieval and e
 import io
 import logging
 import re
-import tempfile
-import uuid
 from pathlib import Path
 from typing import Any
 
@@ -25,9 +23,40 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "DoclingParser",
+    "UnsupportedDocumentFormatError",
+    "SUPPORTED_DOCUMENT_EXTENSIONS",
     "_extract_acroform_fields_by_page",
     "_format_acroform_fields_markdown",
 ]
+
+
+class UnsupportedDocumentFormatError(ValueError):
+    """Raised when an uploaded document has an unsupported extension or binary format."""
+
+
+SUPPORTED_DOCUMENT_EXTENSIONS = frozenset(
+    {
+        ".pdf",
+        ".docx",
+        ".xlsx",
+        ".xls",
+        ".html",
+        ".htm",
+        ".txt",
+        ".md",
+        ".json",
+        ".csv",
+        ".tsv",
+        ".xml",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".tiff",
+        ".tif",
+        ".bmp",
+        ".webp",
+    }
+)
 
 
 # Readability & CMap validation thresholds
@@ -197,13 +226,18 @@ class DoclingParser:
         pass
 
     def _parse_pdf(
-        self, path_obj: Path, doc_title: str | None = None
+        self, source: Path | io.BytesIO | bytes, doc_title: str | None = None
     ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract digital text or render high-resolution visual page chunks."""
         import pypdfium2
 
-        title = doc_title or path_obj.stem
-        pdf = pypdfium2.PdfDocument(path_obj)
+        title = doc_title or (source.stem if isinstance(source, Path) else "document")
+        # Keep stream object referenced locally throughout execution to guarantee buffer lifetime
+        stream = io.BytesIO(source) if isinstance(source, bytes) else source
+        if isinstance(stream, io.BytesIO):
+            stream.seek(0)
+
+        pdf = pypdfium2.PdfDocument(stream)
         page_images: dict[int, bytes] = {}
         try:
             page_acroforms = _extract_acroform_fields_by_page(pdf)
@@ -266,32 +300,49 @@ class DoclingParser:
         return doc, page_images
 
     def _parse_image(
-        self, path_obj: Path, doc_title: str | None = None
+        self, source: Path | io.BytesIO | bytes, doc_title: str | None = None
     ) -> tuple[DoclingDocument, dict[int, bytes]]:
-        """Ingest an image file as a visual document chunk preserving raw RGB bytes."""
-        title = doc_title or path_obj.stem
-        with Image.open(path_obj) as img:
-            rgb_img = img.convert("RGB")
-            buf = io.BytesIO()
-            rgb_img.save(buf, format="JPEG", quality=92)
-            img_bytes = buf.getvalue()
+        """Ingest single or multi-page image files preserving in-memory JPEG bytes."""
+        import PIL.ImageSequence
 
-        page_images: dict[int, bytes] = {1: img_bytes}
-        full_md = f"# {title}\n\n## Sayfa 1\n\n[Görsel Doküman - {title}]\n"
+        title = doc_title or (source.stem if isinstance(source, Path) else "image")
+        buf = io.BytesIO(source) if isinstance(source, bytes) else source
+        if isinstance(buf, io.BytesIO):
+            buf.seek(0)
+
+        page_images: dict[int, bytes] = {}
+        with Image.open(buf) as img:
+            for idx, frame in enumerate(PIL.ImageSequence.Iterator(img), 1):
+                rgb_img = frame.convert("RGB")
+                out_buf = io.BytesIO()
+                rgb_img.save(out_buf, format="JPEG", quality=92)
+                page_images[idx] = out_buf.getvalue()
+
+        if not page_images:
+            raise UnsupportedDocumentFormatError(f"Image '{title}' contains no readable frames.")
+
+        md_parts = [f"# {title}\n"]
+        for p_idx in sorted(page_images.keys()):
+            md_parts.append(f"## Sayfa {p_idx}\n\n[Görsel Doküman - {title} - Sayfa {p_idx}]\n")
+
         doc = _markdown_to_docling_document(
-            markdown_content=full_md,
+            markdown_content="\n".join(md_parts),
             title=title,
         )
         return doc, page_images
 
     def _parse_docx(
-        self, path_obj: Path, doc_title: str | None = None
+        self, source: Path | io.BytesIO | bytes, doc_title: str | None = None
     ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract structured text and tables from a DOCX file."""
         import docx
 
-        title = doc_title or path_obj.stem
-        doc = docx.Document(path_obj)
+        title = doc_title or (source.stem if isinstance(source, Path) else "document")
+        stream = io.BytesIO(source) if isinstance(source, bytes) else source
+        if isinstance(stream, io.BytesIO):
+            stream.seek(0)
+
+        doc = docx.Document(stream)
         md_parts = [f"# {title}\n"]
 
         for p in doc.paragraphs:
@@ -313,13 +364,17 @@ class DoclingParser:
         return _markdown_to_docling_document("\n".join(md_parts), title=title), {}
 
     def _parse_xlsx(
-        self, path_obj: Path, doc_title: str | None = None
+        self, source: Path | io.BytesIO | bytes, doc_title: str | None = None
     ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract structured sheets and tables from an XLSX file."""
         import openpyxl
 
-        title = doc_title or path_obj.stem
-        wb = openpyxl.load_workbook(path_obj, data_only=True)
+        title = doc_title or (source.stem if isinstance(source, Path) else "spreadsheet")
+        stream = io.BytesIO(source) if isinstance(source, bytes) else source
+        if isinstance(stream, io.BytesIO):
+            stream.seek(0)
+
+        wb = openpyxl.load_workbook(stream, data_only=True)
         md_parts = [f"# {title}\n"]
 
         for sheet_name in wb.sheetnames:
@@ -342,13 +397,19 @@ class DoclingParser:
         return _markdown_to_docling_document("\n".join(md_parts), title=title), {}
 
     def _parse_html(
-        self, path_obj: Path, doc_title: str | None = None
+        self, source: Path | io.BytesIO | bytes, doc_title: str | None = None
     ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract structured text from an HTML file."""
         from bs4 import BeautifulSoup
 
-        title = doc_title or path_obj.stem
-        html_text = path_obj.read_text(encoding="utf-8", errors="ignore")
+        title = doc_title or (source.stem if isinstance(source, Path) else "document")
+        if isinstance(source, Path):
+            html_text = source.read_text(encoding="utf-8", errors="ignore")
+        elif isinstance(source, bytes):
+            html_text = source.decode("utf-8", errors="ignore")
+        else:
+            html_text = source.getvalue().decode("utf-8", errors="ignore")
+
         soup = BeautifulSoup(html_text, "html.parser")
         title_tag = soup.find("title")
         t = title_tag.get_text().strip() if title_tag else title
@@ -367,11 +428,16 @@ class DoclingParser:
         return _markdown_to_docling_document("\n".join(md_parts), title=title), {}
 
     def _parse_text(
-        self, path_obj: Path, doc_title: str | None = None
+        self, source: Path | io.BytesIO | bytes, doc_title: str | None = None
     ) -> tuple[DoclingDocument, dict[int, bytes]]:
         """Extract text from plain text or markdown files."""
-        title = doc_title or path_obj.stem
-        text = path_obj.read_text(encoding="utf-8", errors="ignore")
+        title = doc_title or (source.stem if isinstance(source, Path) else "document")
+        if isinstance(source, Path):
+            text = source.read_text(encoding="utf-8", errors="ignore")
+        elif isinstance(source, bytes):
+            text = source.decode("utf-8", errors="ignore")
+        else:
+            text = source.getvalue().decode("utf-8", errors="ignore")
         return _markdown_to_docling_document(text, title=title), {}
 
     def parse_path(
@@ -411,13 +477,10 @@ class DoclingParser:
             doc, images = self._parse_text(path_obj, doc_title=doc_title)
             return doc, filename, images
 
-        # Default fallback: try reading as text, else image
-        try:
-            doc, images = self._parse_text(path_obj, doc_title=doc_title)
-            return doc, filename, images
-        except Exception:
-            doc, images = self._parse_image(path_obj, doc_title=doc_title)
-            return doc, filename, images
+        raise UnsupportedDocumentFormatError(
+            f"Unsupported document format '{suffix}' for file '{filename}'. "
+            f"Supported extensions: {sorted(SUPPORTED_DOCUMENT_EXTENSIONS)}"
+        )
 
     def parse_bytes(
         self,
@@ -425,20 +488,36 @@ class DoclingParser:
         filename: str,
         suffix: str | None = None,
     ) -> tuple[DoclingDocument, str, dict[int, bytes]]:
-        """Safely write bytes to a temporary file, parse with Docling, and remove the file."""
-        if not suffix:
-            suffix = Path(filename).suffix or ".tmp"
+        """Parse document bytes directly in volatile memory with zero disk leakage."""
+        sfx = (suffix or Path(filename).suffix).lower()
+        doc_title = Path(filename).stem
 
-        temp_name = f"docneedle_ingest_{uuid.uuid4().hex}{suffix}"
-        temp_path = Path(tempfile.gettempdir()) / temp_name
+        if sfx in {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".webp"}:
+            logger.info(f"Image '{filename}' detected; loading as multimodal visual chunk.")
+            doc, images = self._parse_image(content, doc_title=doc_title)
+            return doc, filename, images
 
-        try:
-            temp_path.write_bytes(content)
-            doc, actual_name, images = self.parse_path(temp_path, display_name=filename)
-            return doc, actual_name, images
-        finally:
-            if temp_path.exists():
-                try:
-                    temp_path.unlink()
-                except OSError:
-                    pass
+        if sfx == ".pdf":
+            doc, images = self._parse_pdf(content, doc_title=doc_title)
+            return doc, filename, images
+
+        if sfx == ".docx":
+            doc, images = self._parse_docx(content, doc_title=doc_title)
+            return doc, filename, images
+
+        if sfx in {".xlsx", ".xls"}:
+            doc, images = self._parse_xlsx(content, doc_title=doc_title)
+            return doc, filename, images
+
+        if sfx in {".html", ".htm"}:
+            doc, images = self._parse_html(content, doc_title=doc_title)
+            return doc, filename, images
+
+        if sfx in {".txt", ".md", ".json", ".csv", ".tsv", ".xml"}:
+            doc, images = self._parse_text(content, doc_title=doc_title)
+            return doc, filename, images
+
+        raise UnsupportedDocumentFormatError(
+            f"Unsupported document format '{sfx}' for file '{filename}'. "
+            f"Supported extensions: {sorted(SUPPORTED_DOCUMENT_EXTENSIONS)}"
+        )

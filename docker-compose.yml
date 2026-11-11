@@ -5,16 +5,29 @@ services:
       dockerfile: Dockerfile
     container_name: docneedle
     restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1024m
+    ulimits:
+      core: 0
     ports:
       - "7860:7860"
     environment:
       - HOST=0.0.0.0
       - PORT=7860
+      - TMPDIR=/tmp
+      - HF_HOME=/app/hf-cache
+      - XDG_CACHE_HOME=/tmp/cache
+      - GRADIO_TEMP_DIR=/tmp/gradio
+      - GRADIO_ANALYTICS_ENABLED=false
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - HF_HUB_OFFLINE=1
+      - PYTHONDONTWRITEBYTECODE=1
       - MODEL_STORAGE_DIR=/app/models
       - CONFIG_TOML=/app/config.toml
     volumes:
-      # Model weights stored on host to persist across container rebuilds
-      - ./models:/app/models
+      # Model weights mounted read-only to preserve weights integrity
+      - ./models:/app/models:ro
       # Pipeline configuration mounted read-only for live tuning
       - ./config.toml:/app/config.toml:ro
     healthcheck:

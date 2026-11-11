@@ -85,8 +85,8 @@ model_flash_attn = true
 # TR: Yüklenen tekil belgeler için megabayt cinsinden maksimum dosya boyutu
 max_upload_size_mb = 100
 
-# EN: High-resolution rasterization scale factor for rendering PDF pages to visual JPEG chunks (1.5 = ~150 DPI)
-# TR: PDF sayfalarını görsel JPEG parçalarına dönüştürme rasterize ölçek katsayısı (1.5 = ~150 DPI)
+# EN: High-resolution rasterization scale factor for rendering PDF pages to visual JPEG chunks (1.5 ≈ 108 DPI; base 72 pt/in * 1.5)
+# TR: PDF sayfalarını görsel JPEG parçalarına dönüştürme rasterize ölçek katsayısı (1.5 ≈ 108 DPI; taban 72 pt/inç * 1.5)
 pdf_render_scale = 1.5
 
 # EN: Minimum character threshold required on a page to qualify as readable digital text rather than scanned imagery

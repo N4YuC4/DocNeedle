@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from docneedle.api.routes_extract import router as extract_router
 from docneedle.api.routes_jobs import router as jobs_router
 from docneedle.config import settings
+from docneedle.hardening import harden_process
 
 logger = logging.getLogger(__name__)
 
@@ -314,6 +315,9 @@ async def health_check() -> HealthResponse:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifespan context manager for application startup and shutdown lifecycle events."""
+    # Enforce kernel-level non-dumpable memory protection to prevent core dump leaks
+    harden_process()
+
     logger.info(
         "--> [DOCNEEDLE API] Initializing %s v%s (Python %s)...",
         settings.app_name,

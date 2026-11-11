@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from docneedle.config import settings
+from docneedle.hardening import harden_process
 from docneedle.retrieval.embedder import BaseEmbedder, EmbeddingGemma2Embedder
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,10 @@ def _embedder_worker_loop(
 ) -> None:
     """Worker process loop that hosts EmbeddingGemma2Embedder."""
     try:
+        # Enforce kernel-level non-dumpable memory protection in isolated worker process;
+        # fresh interpreter process does not inherit PR_SET_DUMPABLE from parent.
+        harden_process()
+
         if n_gpu_layers and n_gpu_layers != 0:
             try:
                 from docneedle.cuda_compat import preload_cuda_runtime_libs

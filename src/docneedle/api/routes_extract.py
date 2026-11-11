@@ -15,6 +15,7 @@ from docneedle.cuda_compat import gpu_decorator
 from docneedle.extraction.schemas import ExtractionItemQuery, ExtractionResponse
 from docneedle.extraction.service import ExtractionService
 from docneedle.ingest.models import DocumentChunk
+from docneedle.ingest.parser import UnsupportedDocumentFormatError
 from docneedle.ingest.service import IngestionService
 from docneedle.retrieval.store import SessionVectorStore
 
@@ -81,10 +82,13 @@ def _sync_extract_session(
                 logger.info(
                     f"--> [{idx}/{len(files_data)}] Parsing: {filename} ({kb_size:.1f} KB)..."
                 )
-                ingest_result = ingestion_service.ingest_bytes(
-                    content=content,
-                    filename=filename,
-                )
+                try:
+                    ingest_result = ingestion_service.ingest_bytes(
+                        content=content,
+                        filename=filename,
+                    )
+                except UnsupportedDocumentFormatError as err:
+                    raise HTTPException(status_code=415, detail=str(err)) from err
                 all_chunks.extend(ingest_result.chunks)
                 logger.info(
                     f"    Extracted {len(ingest_result.chunks)} chunks (Total: {len(all_chunks)})."

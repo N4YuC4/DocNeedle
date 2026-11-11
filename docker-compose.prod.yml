@@ -1,0 +1,44 @@
+# ==============================================================================
+# DocNeedle Production Headless API Compose Configuration (docker-compose.prod.yml)
+#
+# Runs strictly headless FastAPI backend (no Gradio UI) with complete kernel hardening,
+# read-only rootfs, RAM-backed tmpfs, offline enforcement, and zero disk leakage.
+# ==============================================================================
+
+services:
+  docneedle-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: docneedle-api
+    restart: unless-stopped
+    command: ["python", "-m", "uvicorn", "docneedle.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=1024m
+    ulimits:
+      core: 0
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - TMPDIR=/tmp
+      - HF_HOME=/app/hf-cache
+      - XDG_CACHE_HOME=/tmp/cache
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - HF_HUB_OFFLINE=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - MODEL_STORAGE_DIR=/app/models
+      - CONFIG_TOML=/app/config.toml
+    volumes:
+      # Model weights mounted read-only to preserve weights integrity
+      - ./models:/app/models:ro
+      # Pipeline configuration mounted read-only for live tuning
+      - ./config.toml:/app/config.toml:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
