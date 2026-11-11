@@ -22,7 +22,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 COPY pyproject.toml uv.lock* requirements.txt* packages.txt* README.md* /app/
 
 # Install dependencies into system environment
-RUN uv pip install --system -r requirements.txt || uv pip install --system .
+RUN uv pip install --system -r requirements.txt
 
 # Copy configuration, static assets, scripts and application source code
 COPY config.toml /app/config.toml
@@ -45,6 +45,8 @@ RUN uv pip install --system --no-deps .
 ENV HF_HOME=/app/hf-cache
 RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen3-Reranker-0.6B')"
 
+# Port 7860 is the standard port for the unified Gradio UI + FastAPI root app (e.g. Hugging Face Spaces).
+# For headless microservice API deployments on port 8000, see docker-compose.prod.yml.
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \

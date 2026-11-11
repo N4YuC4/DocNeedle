@@ -10,13 +10,6 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# Configure standard logging for standalone and headless microservice execution
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stdout,
-)
-
 from docneedle.cuda_compat import preload_cuda_runtime_libs  # noqa: E402
 
 preload_cuda_runtime_libs()
@@ -323,9 +316,21 @@ async def health_check() -> HealthResponse:
     return get_system_health()
 
 
+def configure_logging() -> None:
+    """Configure standard stdout logging handler if root logger has none."""
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            stream=sys.stdout,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifespan context manager for application startup and shutdown lifecycle events."""
+    configure_logging()
     # Enforce kernel-level non-dumpable memory protection to prevent core dump leaks
     harden_process()
 

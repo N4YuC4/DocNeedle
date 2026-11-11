@@ -45,11 +45,17 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
-      - name: Run fast unit test suite (156 tests, kernel hardening & zero-disk)
+      - name: Run fast unit test suite (159 tests, kernel hardening & zero-disk)
         run: |
           CUDA_DIRS=$(uv run python -c "import docneedle.cuda_compat as c; print(':'.join(map(str, c.configure_cuda_library_paths())))")
           export LD_LIBRARY_PATH="${CUDA_DIRS}:${LD_LIBRARY_PATH}"
-          uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_collision_turkish.py tests/test_acroform.py tests/test_ui_schema_sync.py tests/test_health.py tests/test_speculative.py tests/test_cuda_compat.py tests/test_ingest.py tests/test_ocr_grounding.py tests/test_zero_disk.py -v
+          # Runs all unit & zero-disk tests, excluding heavy model-weight tests that require live GGUFs
+          uv run pytest tests/ \
+            --ignore=tests/test_extraction.py \
+            --ignore=tests/test_multimodal_extraction.py \
+            --ignore=tests/test_retrieval.py \
+            --ignore=tests/test_jobs.py \
+            -v
 
   container-zero-disk-enforcement:
     runs-on: ubuntu-latest

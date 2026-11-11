@@ -123,6 +123,8 @@ async def read_and_validate_uploads(files: list[UploadFile]) -> list[tuple[str, 
     for upload in files:
         filename = upload.filename or "uploaded_document"
         sfx = Path(filename).suffix.lower()
+        # Fast-fail validation layer: Enforces supported extensions before memory spooling.
+        # Deep binary stream validation is enforced downstream by DoclingParser.
         if not sfx or sfx not in SUPPORTED_DOCUMENT_EXTENSIONS:
             raise HTTPException(
                 status_code=415,

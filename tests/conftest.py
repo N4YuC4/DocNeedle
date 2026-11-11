@@ -10,5 +10,6 @@ try:
     from docneedle.cuda_compat import preload_cuda_runtime_libs
 
     preload_cuda_runtime_libs()
-except Exception:
+except ImportError, OSError:
+    # Safely bypass in CPU-only / weight-free test environments where CUDA runtime is absent
     pass
