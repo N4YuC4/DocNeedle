@@ -196,10 +196,13 @@ def preload_modular_backends() -> bool:
         return True
 
     # Critical ZeroGPU / container guard:
-    # If on Linux and no NVIDIA device nodes (/dev/nvidia*) are mounted, do NOT attempt
-    # to load modular CUDA backends. Loading ggml-cuda without an accessible device triggers
-    # cuInit failure ('ggml_cuda_init: no CUDA-capable device is detected') which poisons
-    # parent process memory and hangs forked ZeroGPU workers.
+    # If on ZeroGPU, do NOT preload modular CUDA backends at startup.
+    # ZeroGPU mounts /dev/nvidia* but blocks access via cgroups until @spaces.GPU leases it.
+    # Loading ggml-cuda without an active lease triggers cuInit failure, poisoning memory.
+    if bool(os.environ.get("SPACES_ZERO_GPU")) or os.environ.get("SYSTEM") == "spaces":
+        logger.debug("ZeroGPU detected. Deferring modular CUDA backend load to GPU lease.")
+        return False
+
     if sys.platform.startswith("linux"):
         has_nvidia_dev = any(
             Path(f"/dev/{dev}").exists() for dev in ("nvidia0", "nvidiactl", "nvhost-ctrl")
@@ -215,17 +218,20 @@ def preload_modular_backends() -> bool:
         import llama_cpp
 
         lib_dir = Path(llama_cpp.__file__).resolve().parent / "lib"
-        libggml_path = lib_dir / "libggml.so"
-        if libggml_path.is_file():
-            libggml = ctypes.CDLL(str(libggml_path))
-            if hasattr(libggml, "ggml_backend_load_all_from_path"):
-                libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
-                libggml.ggml_backend_load_all_from_path(str(lib_dir).encode("utf-8"))
-                logger.info(
-                    "--> [CUDA Backends] Preloaded modular llama.cpp backends from %s", lib_dir
-                )
-                _modular_backends_preloaded = True
-                return True
+        for base_name in ("libggml.so", "libggml-base.so", "libggml_llamacpp.so"):
+            lib_path = lib_dir / base_name
+            if lib_path.is_file():
+                libggml = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+                if hasattr(libggml, "ggml_backend_load_all_from_path"):
+                    libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+                    libggml.ggml_backend_load_all_from_path(str(lib_dir).encode("utf-8"))
+                    os.environ["GGML_BACKEND_SEARCH_PATH"] = str(lib_dir)
+                    logger.info(
+                        "--> [CUDA Backends] Preloaded modular llama.cpp backends from %s",
+                        lib_dir,
+                    )
+                    _modular_backends_preloaded = True
+                    return True
     except Exception as e:
         logger.debug("Modular backend preloading skipped: %s", e)
     return False

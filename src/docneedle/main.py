@@ -136,13 +136,16 @@ class HealthResponse(BaseModel):
 def check_cuda_backend_status() -> dict[str, bool]:
     """Inspect native llama.cpp and CUDA backend capabilities safely."""
     supports_gpu = False
-    try:
-        import llama_cpp
+    if settings.is_zerogpu:
+        supports_gpu = True
+    else:
+        try:
+            import llama_cpp
 
-        if hasattr(llama_cpp, "llama_supports_gpu_offload"):
-            supports_gpu = bool(llama_cpp.llama_supports_gpu_offload())
-    except Exception:
-        pass
+            if hasattr(llama_cpp, "llama_supports_gpu_offload"):
+                supports_gpu = bool(llama_cpp.llama_supports_gpu_offload())
+        except Exception:
+            pass
 
     cuda_libs_found = False
     try:

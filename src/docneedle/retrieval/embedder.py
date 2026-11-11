@@ -6,6 +6,7 @@ and raw image documents in the same cross-modal vector space.
 
 import ctypes
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -102,37 +103,29 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
 
         preload_cuda_runtime_libs()
 
-        # Preload llama.cpp runtime backend libraries with RTLD_GLOBAL so libdocneedle_embed.so
-        # resolves symbols dynamically from the host environment without version mismatches.
-        retrieval_dir = Path(__file__).resolve().parent
-        candidate_dirs = [retrieval_dir]
+        # Preload llama_cpp runtime libraries with RTLD_GLOBAL so libdocneedle_embed.so
+        # resolves symbols dynamically from the unified llama_cpp installation.
         try:
             import llama_cpp
 
-            candidate_dirs.append(Path(llama_cpp.__file__).resolve().parent / "lib")
-        except Exception:
-            pass
-
-        for d in candidate_dirs:
-            if (d / "libllama.so").exists():
-                for name in (
-                    "libggml-base.so",
-                    "libggml-cpu.so",
-                    "libggml-cuda.so",
-                    "libggml_llamacpp.so",
-                    "libggml.so",
-                    "libllama-common.so.0.7.0",
-                    "libllama-common.so",
-                    "libllama.so",
-                    "libmtmd.so",
-                ):
-                    p = d / name
-                    if p.exists():
-                        try:
-                            ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
-                        except Exception:
-                            pass
-                break
+            llama_lib_dir = Path(llama_cpp.__file__).resolve().parent / "lib"
+            for base_name in (
+                "libggml.so",
+                "libggml-base.so",
+                "libllama-common.so",
+                "libllama.so",
+                "libmtmd.so",
+            ):
+                p = llama_lib_dir / base_name
+                if p.exists():
+                    ctypes.CDLL(str(p), mode=ctypes.RTLD_GLOBAL)
+            libggml = ctypes.CDLL(str(llama_lib_dir / "libggml.so"))
+            if hasattr(libggml, "ggml_backend_load_all_from_path"):
+                libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
+                libggml.ggml_backend_load_all_from_path(str(llama_lib_dir).encode("utf-8"))
+            os.environ["GGML_BACKEND_SEARCH_PATH"] = str(llama_lib_dir)
+        except Exception as e:
+            logger.warning("Could not preload llama_cpp runtime libraries: %s", e)
 
         self.n_ctx = max(4096, settings.chunker_max_tokens + 256)
 

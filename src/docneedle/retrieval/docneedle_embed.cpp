@@ -72,10 +72,10 @@ void * docneedle_embed_init(
             devs[0] = cpu_dev;
             mparams.devices = devs;
         }
-        mparams.use_extra_bufts = false;
     }
 
-    llama_model * model = llama_model_load_from_file(model_path, mparams);
+    const char * paths[1] = { model_path };
+    llama_model * model = llama_model_load_from_splits(paths, 1, mparams);
     if (!model) {
         return nullptr;
     }
