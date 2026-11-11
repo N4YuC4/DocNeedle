@@ -37,6 +37,8 @@ jobs:
 
       - name: Run fast unit test suite (156 tests, kernel hardening & zero-disk)
         run: |
+          CUDA_DIRS=$(python -c "import sys; sys.path.insert(0, 'src'); import docneedle.cuda_compat as c; print(':'.join(str(p) for p in c.configure_cuda_library_paths()))")
+          export LD_LIBRARY_PATH="${CUDA_DIRS}:${LD_LIBRARY_PATH}"
           pytest tests/test_clean_modules.py tests/test_collision.py tests/test_collision_turkish.py tests/test_acroform.py tests/test_ui_schema_sync.py tests/test_health.py tests/test_speculative.py tests/test_cuda_compat.py tests/test_ingest.py tests/test_ocr_grounding.py tests/test_zero_disk.py -v
 
   container-zero-disk-enforcement:

@@ -4,9 +4,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import llama_cpp
-from llama_cpp._utils import suppress_stdout_stderr
-from llama_cpp.llama_chat_format import (
+from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+preload_cuda_runtime_libs()
+
+import llama_cpp  # noqa: E402
+from llama_cpp._utils import suppress_stdout_stderr  # noqa: E402
+from llama_cpp.llama_chat_format import (  # noqa: E402
     Gemma4ChatHandler,
     Jinja2ChatFormatter,
     MTMDChatHandler,

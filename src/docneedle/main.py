@@ -10,10 +10,14 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from docneedle.api.routes_extract import router as extract_router
-from docneedle.api.routes_jobs import router as jobs_router
-from docneedle.config import settings
-from docneedle.hardening import harden_process
+from docneedle.cuda_compat import preload_cuda_runtime_libs
+
+preload_cuda_runtime_libs()
+
+from docneedle.api.routes_extract import router as extract_router  # noqa: E402
+from docneedle.api.routes_jobs import router as jobs_router  # noqa: E402
+from docneedle.config import settings  # noqa: E402
+from docneedle.hardening import harden_process  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
