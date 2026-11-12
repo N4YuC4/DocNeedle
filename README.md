@@ -226,9 +226,9 @@ Automatically downloads the required quantized weights (~4.5 GB) into `models/` 
 
 Settings load from `config.toml`; optionally override via `.env` (`cp .env.example .env 2>/dev/null || touch .env`). Key defaults:
 
-- `gpu_enabled = true`: CUDA offload if available (`false` for CPU-only).
-- `llm_n_gpu_layers = -1`: offload all layers (`0` = CPU).
-- `reranker_enabled = false`: disabled by default for low latency; enable for maximum citation precision.
+- `gpu_enabled = true`: CUDA acceleration enabled across all models (LLM, Embedding, Reranker).
+- `llm_n_gpu_layers = -1`, `embedding_n_gpu_layers = -1`, `reranker_n_gpu_layers = -1`: offload all layers to GPU (`0` = CPU).
+- `reranker_enabled = true`: cross-encoder neural reranking enabled by default for maximum citation accuracy.
 
 ### 5. Launch
 
@@ -286,7 +286,6 @@ DocNeedle/
 
 ```mermaid
 flowchart TD
-    Z["0. API Gateway: Extension Validation (415 fail-fast)"] --> A
     A["Uploaded Files & Schema"] --> B["1. Ingestion: AcroForm Direct + Docling + pypdfium2"]
     B --> C["2. Chunker: Semantic Text Chunks + High-Res Page Renderings"]
     C --> D["3. Ephemeral In-Memory Indexing: SessionVectorStore"]
@@ -296,8 +295,6 @@ flowchart TD
     G --> H["7. Spatial Collision Resolver & Confidence Verification"]
     H --> I["Structured JSON Output with Provenance Citations"]
     I --> J["finally: store.clear() (RAM purged)"]
-    J --> K["Container: read-only rootfs + tmpfs + core=0"]
-    K --> L["Kernel: PR_SET_DUMPABLE=0 (no core dumps)"]
 ```
 
 ### OCR-Free Visual RAG & Digital Text Ingestion
@@ -619,6 +616,8 @@ cors_origins = [
 [hardware]
 gpu_enabled = true             # CUDA GPU offload (auto-detected on ZeroGPU)
 llm_n_gpu_layers = -1          # -1 = all layers on GPU; 0 = CPU
+embedding_n_gpu_layers = -1    # -1 = all embedding layers on GPU
+reranker_n_gpu_layers = -1     # -1 = all reranker layers on GPU
 model_n_batch = 256            # Logical batch size for prompt evaluation
 model_n_ubatch = 256           # Physical micro-batch size for GPU kernels
 reranker_n_ctx = 2048          # Reranker context window
@@ -658,7 +657,7 @@ doc_instruction = "title: {doc_name} | text: {text}"
 [retrieval]
 top_k = 10                     # Candidates from RRF hybrid search
 rrf_constant = 60
-reranker_enabled = false       # Qwen3 cross-encoder (off by default on CPU)
+reranker_enabled = true        # Qwen3 cross-encoder (enabled by default on GPU)
 reranker_model = "Qwen/Qwen3-Reranker-0.6B"
 reranker_candidate_k = 4
 rerank_top_k = 3
