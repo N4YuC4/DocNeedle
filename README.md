@@ -167,7 +167,7 @@ Per-document logs, ground-truth diffs, and summary metrics are saved to `benchma
 
 - **OS:** Linux (Ubuntu 22.04/24.04, Debian 12, Arch, Fedora recommended). On Windows, use WSL2 (Ubuntu 22.04/24.04 recommended); native Windows and macOS are not supported because the bundled native libraries (`libdocneedle_embed.so`, `libllama.so`, `libggml-*.so`) are Linux ELF binaries.
 - **RAM:** 8 GB minimum (16 GB recommended for CPU-only inference).
-- **GPU (optional):** NVIDIA, CUDA 12.0+, Compute Capability ≥ 8.0 (RTX 30/40/50, A100, H100, Blackwell). Fits within 8 GB VRAM (minimum).
+- **GPU (optional):** NVIDIA, CUDA 12.0+, Compute Capability ≥ 8.0 (RTX 30/40/50, A100, H100, Blackwell). Fits within 8 GB VRAM (minimum). For Docker GPU passthrough, `nvidia-container-toolkit` is required on the host.
 - **Storage:** ~5 GB for model weights and tokenizers.
 - **System packages** (OpenGL and GLib for Docling/pypdfium2):
 
@@ -818,10 +818,22 @@ uv run python scripts/download_models.py
 
 **With NVIDIA GPU Acceleration (Recommended for Production):**
 
-Requires `nvidia-container-toolkit` installed on the host.
+Requires `nvidia-container-toolkit` on the host. If not already installed:
 
 ```bash
-docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --build
+# Install NVIDIA Container Toolkit (Ubuntu/Debian)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+  && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+```
+
+Launch container with GPU passthrough:
+
+```bash
+docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d
 ```
 
 **CPU-Only Profile (or CI Environments):**
@@ -862,6 +874,7 @@ curl -X POST "http://localhost:8000/v1/extract" \
 
 | Symptom | Cause | Solution |
 | :--- | :--- | :--- |
+| `could not select device driver "nvidia"` | `nvidia-container-toolkit` missing on host | Install toolkit: `sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
 | `libGL.so.1: cannot open shared object file` | Missing OpenGL runtime in headless Linux | `sudo apt-get install -y libgl1 libglib2.0-0` |
 | `FileNotFoundError: Missing required model: ...` | Weights not downloaded or wrong `MODEL_STORAGE_DIR` | `uv run python scripts/download_models.py`, or `export MODEL_STORAGE_DIR=/path/to/models` |
 | CUDA Out of Memory | Context size or layer offload exceeds VRAM | Lower `llm_n_gpu_layers` (e.g. `16`–`20`); keep `model_kv_cache_type_k/v = 1`; set `reranker_enabled = false` |
