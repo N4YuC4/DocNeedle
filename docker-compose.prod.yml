@@ -26,6 +26,9 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - TMPDIR=/tmp
+      - CUDA_CACHE_PATH=/tmp/nv-cache
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - HF_HOME=/app/hf-cache
       - XDG_CACHE_HOME=/tmp/cache
       - HF_HUB_DISABLE_TELEMETRY=1

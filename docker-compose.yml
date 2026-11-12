@@ -16,6 +16,9 @@ services:
       - HOST=0.0.0.0
       - PORT=7860
       - TMPDIR=/tmp
+      - CUDA_CACHE_PATH=/tmp/nv-cache
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - HF_HOME=/app/hf-cache
       - XDG_CACHE_HOME=/tmp/cache
       - GRADIO_TEMP_DIR=/tmp/gradio
