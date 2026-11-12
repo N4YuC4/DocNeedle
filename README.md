@@ -849,8 +849,8 @@ Execute an end-to-end extraction query against the containerized microservice:
 
 ```bash
 curl -X POST "http://localhost:8000/v1/extract" \
-  -F "files=@sample.pdf" \
-  -F 'schema=[{"key": "total", "description": "Total amount", "type": "money"}]'
+  -F "files=@assets/examples/sample_lease_agreement.pdf" \
+  -F 'schema=[{"key": "monthly_rent", "description": "Agreed monthly rent amount", "type": "money"}]'
 ```
 
 > [!NOTE]

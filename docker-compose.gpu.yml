@@ -2,6 +2,7 @@
 # DocNeedle NVIDIA GPU Hardware Passthrough Override (docker-compose.gpu.yml)
 #
 # Enables NVIDIA GPU hardware reservation for local and on-premise production.
+# Compatible with both docker-compose.prod.yml (headless API) and docker-compose.yml (UI).
 # Usage:
 #   Headless API (port 8000):
 #     docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --build
@@ -10,15 +11,6 @@
 # ==============================================================================
 
 services:
-  docneedle-api:
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   docneedle:
     deploy:
       resources:

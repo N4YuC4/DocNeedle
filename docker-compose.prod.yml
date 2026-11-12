@@ -6,7 +6,7 @@
 # ==============================================================================
 
 services:
-  docneedle-api:
+  docneedle:
     build:
       context: .
       dockerfile: Dockerfile
