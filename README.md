@@ -16,6 +16,8 @@
   <img src="https://img.shields.io/badge/Gradio-6+-orange.svg" alt="Gradio 6" />
   <img src="https://img.shields.io/badge/ZeroGPU-Ready-7928ca.svg" alt="ZeroGPU Ready" />
   <img src="https://img.shields.io/badge/Privacy-Zero%20Disk%20Leakage-brightgreen.svg" alt="Zero Disk Leakage" />
+  <img src="https://github.com/N4YuC4/DocNeedle/actions/workflows/ci.yml/badge.svg" alt="CI" />
+  <img src="https://img.shields.io/badge/Zero--Disk-CI%20Enforced-blue.svg" alt="Zero-Disk Enforcement" />
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License Apache 2.0" />
 </p>
 
@@ -284,6 +286,7 @@ DocNeedle/
 
 ```mermaid
 flowchart TD
+    Z["0. API Gateway: Extension Validation (415 fail-fast)"] --> A
     A["Uploaded Files & Schema"] --> B["1. Ingestion: AcroForm Direct + Docling + pypdfium2"]
     B --> C["2. Chunker: Semantic Text Chunks + High-Res Page Renderings"]
     C --> D["3. Ephemeral In-Memory Indexing: SessionVectorStore"]
@@ -293,6 +296,8 @@ flowchart TD
     G --> H["7. Spatial Collision Resolver & Confidence Verification"]
     H --> I["Structured JSON Output with Provenance Citations"]
     I --> J["finally: store.clear() (RAM purged)"]
+    J --> K["Container: read-only rootfs + tmpfs + core=0"]
+    K --> L["Kernel: PR_SET_DUMPABLE=0 (no core dumps)"]
 ```
 
 ### OCR-Free Visual RAG & Digital Text Ingestion
@@ -335,6 +340,27 @@ LLMs may repeat one salient number or entity across several unpopulated fields. 
    ```
 4. **Temporary uploads:** OS temp files from parser streaming are unlinked (`temp_path.unlink()`) in `finally:` blocks.
 5. **Async job TTL:** Cached job results expire after `job_retention_minutes` (default 15).
+
+### Security Hardening & CI Enforcement
+
+DocNeedle enforces privacy guarantees at the kernel and container level:
+
+**Kernel-Level Hardening:**
+- `PR_SET_DUMPABLE=0` via `prctl()` — prevents core dumps from leaking RAM contents
+- Verified in CI via `test_zero_disk.py` subprocess crash tests
+
+**Container Hardening (`docker-compose.prod.yml`):**
+- Read-only root filesystem (`read_only: true`)
+- RAM-backed `/tmp` via tmpfs (1GB, `noexec`, `nosuid`)
+- Core dump size limited to 0 (`ulimits: core: 0`)
+- Offline Hugging Face mode (`HF_HUB_OFFLINE=1`)
+
+**CI/CD Pipeline (GitHub Actions):**
+| Job | Purpose |
+|---|---|
+| `lint-and-unit-tests` | 159 tests, ruff, zero-disk parser validation |
+| `container-zero-disk-enforcement` | Read-only rootfs + tmpfs Docker test |
+| `container-service-smoke` | Health check, 415 fail-fast, kernel log verification |
 
 ### Supported Data Types & Validation Rules
 
@@ -384,8 +410,8 @@ Served at `http://localhost:7860`, matching the REST API:
 | :--- | :--- | :--- |
 | `GET` | `/` | Service info, docs links, version |
 | `GET` | `/healthz`, `/health` | Diagnostics (Runtime, GPU/CUDA, models, job queue, config); `/health` is an alias |
-| `POST` | `/v1/extract` | **Synchronous** extraction, returns complete JSON |
-| `POST` | `/v1/jobs` | **Asynchronous** extraction, returns `202 Accepted` with tracking URLs |
+| `POST` | `/v1/extract` | **Synchronous** extraction (415 for unsupported formats) |
+| `POST` | `/v1/jobs` | **Asynchronous** extraction (415 for unsupported formats) |
 | `GET` | `/v1/jobs/{job_id}` | Poll job progress and results |
 | `GET` | `/v1/jobs/{job_id}/events` | **SSE** real-time job events |
 | `GET` | `/docs`, `/redoc` | Swagger / ReDoc documentation |
@@ -399,6 +425,13 @@ Multipart form-data parameters:
 | `files` | `binary[]` | Yes | One or more files (PDF, DOCX, XLSX, HTML, CSV, TXT, MD, PNG, JPG, WEBP, TIFF) |
 | `schema` | `string` | Yes | JSON array of target keys, descriptions, and types |
 | `enable_reranker` | `boolean` | No | Overrides reranking; defaults to `config.toml` |
+
+**Error Responses:**
+| Status | Condition |
+|---|---|
+| 415 | Unsupported file extension (validation before memory spooling) |
+| 413 | File exceeds max_upload_size_mb or max_total_upload_size_mb |
+| 422 | Invalid schema JSON |
 
 ```bash
 curl -X POST "http://localhost:7860/v1/extract" \
@@ -690,8 +723,8 @@ max_concurrent_jobs = 10       # Parallel background jobs
 | `uv run uvicorn docneedle.main:app --reload` | API-only dev server with hot reload (port `8000`) |
 | `uv run python scripts/download_models.py [--embedding\|--llm\|--reranker]` | Download all models (~4.5 GB) or a single group |
 | `uv run python scripts/benchmark_extractbench.py --split short` | Run the ExtractBench evaluation |
-| `uv run pytest` | Full automated test suite |
-| `uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py` | Fast unit tests (no model load) |
+| `uv run pytest` | Full automated test suite (requires model weights) |
+| `uv run pytest tests/ --ignore=tests/test_extraction.py --ignore=tests/test_multimodal_extraction.py --ignore=tests/test_retrieval.py --ignore=tests/test_jobs.py -v` | Fast unit test suite (159 tests, kernel hardening & zero-disk, no models needed) |
 | `uv run pytest tests/test_health.py` | `/healthz` and route tests |
 | `uv run ruff check . [--fix]` | Lint (optionally auto-fix) |
 | `uv run ruff format .` | Format code (Python 3.14 profile) |
@@ -704,8 +737,13 @@ max_concurrent_jobs = 10       # Parallel background jobs
 DocNeedle uses `pytest` and `pytest-asyncio` (`asyncio_mode = "auto"`).
 
 ```bash
-# Fast unit tests (<6 s, no model weights)
-uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py tests/test_health.py tests/test_ui_schema_sync.py
+# Fast unit tests (159 tests, <4 s, no model weights)
+uv run pytest tests/ \
+  --ignore=tests/test_extraction.py \
+  --ignore=tests/test_multimodal_extraction.py \
+  --ignore=tests/test_retrieval.py \
+  --ignore=tests/test_jobs.py \
+  -v
 
 # Full end-to-end suite (requires model weights)
 uv run pytest
@@ -734,6 +772,21 @@ The script automatically executes the following:
 2. Synchronizes application source code, configuration, and assets (excluding local environments and caches).
 3. Triggers automated quantized model bootstrap on container cold-start.
 4. Monitors build and deployment status until the Space reaches `RUNNING`.
+
+### Docker (Headless Production)
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+This deployment:
+- Starts a headless FastAPI microservice on port `8000` (no Gradio UI)
+- Enforces strict zero-disk isolation via read-only rootfs (`read_only: true`) and RAM-backed `tmpfs` (1GB, `noexec`, `nosuid`)
+- Activates and verifies Linux kernel anti-dump hardening (`PR_SET_DUMPABLE=0`) in container logs
+- Diagnostic health check: `curl http://localhost:8000/healthz`
+
+> [!NOTE]
+> CI environments use the CPU-only binary (`INSTALL_CPU_LLAMA=true`). Production NVIDIA GPU hosts use the precompiled native multi-architecture CUDA wheel (`sm120`).
 
 ---
 
