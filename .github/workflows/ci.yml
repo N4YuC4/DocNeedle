@@ -93,7 +93,11 @@ jobs:
           INSTALL_CPU_LLAMA: "true"
         run: |
           docker compose --profile cpu build --build-arg INSTALL_CPU_LLAMA=true
-          docker compose --profile cpu up -d --wait
+          if ! docker compose --profile cpu up -d --wait; then
+            echo "ERROR: Container failed healthcheck during startup. Container logs:"
+            docker logs docneedle || true
+            exit 1
+          fi
 
       - name: Verify kernel non-dumpable log in container
         run: |

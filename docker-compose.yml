@@ -16,8 +16,10 @@ x-docneedle-common: &docneedle-common
   build:
     context: .
     dockerfile: Dockerfile
+    target: prod
     args:
       INSTALL_CPU_LLAMA: ${INSTALL_CPU_LLAMA:-false}
+  command: ["python", "app.py"]
   restart: unless-stopped
   read_only: true
   tmpfs:
