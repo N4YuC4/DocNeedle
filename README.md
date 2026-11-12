@@ -5,7 +5,7 @@
 <h1 align="center">DocNeedle</h1>
 
 <p align="center">
-  <strong>Enterprise-Grade Local Document Extraction Microservice & Interactive Platform</strong><br/>
+  <strong>Privacy-First Local Document Extraction Microservice & Interactive Platform</strong><br/>
   Extract schema-governed structured data with auditable source citations and statistical confidence scoring using local, in-process neural models.<br/>
   Zero external API reliance, strict zero-disk volatile memory guarantees, and OCR-free visual RAG.
 </p>
@@ -41,6 +41,7 @@
 - [Configuration Reference](#configuration-reference)
 - [Available Scripts](#available-scripts)
 - [Testing](#testing)
+- [Security Hardening & CI Enforcement](#security-hardening--ci-enforcement)
 - [Production Deployment](#production-deployment)
 - [Troubleshooting](#troubleshooting--faqs)
 - [Contributing](#contributing)
@@ -63,7 +64,7 @@ Unlike pipelines built on cloud APIs or brittle OCR engines, DocNeedle provides:
 
 ## Key Features
 
-- **Zero-Disk Persistence:** `SessionVectorStore` is strictly in-memory; vectors, chunks, and temp files are cleared in `finally: store.clear()`.
+- **Zero-Disk Persistence:** `SessionVectorStore` is strictly in-memory; vectors and chunks are cleared in `finally: store.clear()`.
 - **In-Process Multimodal Models:**
   - **LLM:** Qwen3.5-4B GGUF (`Qwen3.5-4B-Q4_K_M.gguf` + `mmproj-Qwen3.5-4B-F16.gguf`), schema-constrained JSON extraction.
   - **Cross-Modal Embedder:** EmbeddingGemma-2 GGUF (`embeddinggemma-2-UD-Q4_K_XL.gguf` + `mmproj-F16.gguf`), unified text and visual page embeddings.
@@ -256,11 +257,14 @@ uv run uvicorn docneedle.main:app --host 0.0.0.0 --port 8000 --reload
 
 ```
 DocNeedle/
+├── .github/workflows/ci.yml      # CI: lint, 159 unit tests, container enforcement, smoke
 ├── assets/                       # Logo (SVG) and static icons
 ├── app.py                        # Unified Gradio 6 UI + FastAPI root mount & ZeroGPU entry
 ├── config.toml                   # Application, model & pipeline configuration
 ├── pyproject.toml / requirements.txt
 ├── Dockerfile / docker-compose.yml
+├── docker-compose.prod.yml       # Hardened headless API (read-only rootfs, tmpfs)
+├── docker-compose.gpu.yml        # NVIDIA GPU device reservation override
 ├── scripts/
 │   ├── download_models.py        # Model downloader with verification
 │   ├── benchmark_extractbench.py # ExtractBench runner (Value F1, Grounding F1)
@@ -269,7 +273,7 @@ DocNeedle/
 ├── src/docneedle/
 │   ├── main.py                   # FastAPI factory, CORS, /healthz
 │   ├── config.py                 # Pydantic BaseSettings (TOML + env)
-│   ├── hardening.py              # Linux kernel PR_SET_DUMPABLE anti-dump protection
+│   ├── hardening.py              # Kernel PR_SET_DUMPABLE hardening (fail-fast)
 │   ├── cuda_compat.py            # ZeroGPU preloaders & memory leasing wrappers
 │   ├── api/                      # routes_extract.py, routes_jobs.py, validation.py ($ref, size checks)
 │   ├── jobs/                     # models.py, manager.py (in-memory registry, SSE queues, TTL)
@@ -303,7 +307,7 @@ flowchart TD
 DocNeedle natively ingests PDFs, Office documents (`.docx`, `.xlsx`, `.xls`), web pages (`.html`, `.htm`), delimited text (`.csv`, `.tsv`, `.txt`, `.md`, `.json`, `.xml`), and image formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.tiff`, `.bmp`).
 
 1. **Digital documents:** With an embedded text layer (`pdf_embedded_text_min_chars = 50`), Docling extracts markdown, headings, and tables; rasterized pages are preserved alongside.
-2. **Scanned documents & images:** Pages are rasterized at 150 DPI and embedded cross-modally via SigLIP. The raw page image goes directly to the multimodal LLM, which improves fidelity on handwriting, stamps, receipts, and low-contrast scans.
+2. **Scanned documents & images:** Pages are rasterized at 108 DPI (1.5 × 72 pt/in) and embedded cross-modally via SigLIP. The raw page image goes directly to the multimodal LLM, which improves fidelity on handwriting, stamps, receipts, and low-contrast scans.
 
 ### Interactive PDF AcroForm Extraction
 
@@ -322,6 +326,8 @@ LLMs may repeat one salient number or entity across several unpopulated fields. 
 
 `src/docneedle/retrieval/docneedle_embed.cpp` is compiled to `libdocneedle_embed.so` and loaded via `ctypes`. It embeds text (`instruction: "task: search result | query: {text}"`) and raw image bytes into one 768-dimensional L2-normalized space. Precompiled multi-architecture CUDA kernels embedded directly in `libggml-cuda.so` (supporting `sm_80`, `sm_86`, `sm_89`, and `sm_120a`) ensure immediate startup on modern NVIDIA GPUs without runtime compilation.
 
+**Runtime symbol isolation:** The bundled retrieval libraries and the `llama-cpp-python` wheel ship separate `llama.cpp` builds. To prevent `SONAME` collisions and `RTLD_GLOBAL` symbol interposition, the retrieval set uses unversioned `SONAME`s and is loaded with `RTLD_LOCAL | RTLD_DEEPBIND`, giving it an independent symbol scope. All retrieval DSOs must come from a single consistent build; mixing vintages produces `undefined symbol` errors at load time.
+
 ### Zero-Disk Privacy Guarantee
 
 1. **No external telemetry:** Embeddings and inference run in-process; no cloud endpoint is contacted.
@@ -336,8 +342,10 @@ LLMs may repeat one salient number or entity across several unpopulated fields. 
    finally:
        store.clear()  # deallocates chunk buffers immediately
    ```
-4. **Zero temporary disk files:** Uploaded payloads and documents are parsed entirely in-memory using `io.BytesIO` streams with zero temporary disk files created or unlinked.
+4. **In-memory parsing:** documents are parsed directly from byte buffers (`io.BytesIO`); no temporary files are created on disk.
 5. **Async job TTL:** Cached job results expire after `job_retention_minutes` (default 15).
+
+**Scope:** the parser writes no temporary files. Framework-level multipart upload spooling uses `TMPDIR`; in the hardened container profile `TMPDIR` points to RAM-backed tmpfs. For bare-host runs, point `TMPDIR` at a tmpfs mount if strict zero-disk is required.
 
 ### Security Hardening & CI Enforcement
 
@@ -352,6 +360,8 @@ DocNeedle enforces privacy guarantees at the kernel and container level:
 - RAM-backed `/tmp` via tmpfs (1GB, `nosuid`, zero disk persistence)
 - Core dump size limited to 0 (`ulimits: core: 0`)
 - Offline Hugging Face mode (`HF_HUB_OFFLINE=1`)
+- GPU device reservation via `docker-compose.gpu.yml` (`deploy.resources.reservations.devices` — `driver: nvidia`, `capabilities: [gpu]`)
+- CUDA compute cache redirected to tmpfs (`CUDA_CACHE_PATH`)
 
 **CI/CD Pipeline (GitHub Actions):**
 | Job | Purpose |
@@ -659,7 +669,7 @@ model_flash_attn = true        # Flash Attention
 
 [ingest]
 max_upload_size_mb = 100
-pdf_render_scale = 1.5         # 150 DPI page rendering for visual chunks
+pdf_render_scale = 1.5         # 108 DPI (1.5 × 72 pt/in) page rendering for visual chunks
 pdf_embedded_text_min_chars = 50 # Minimum text length to treat a PDF as digital
 pdf_embedded_text_max_check_pages = 5
 ingestion_cache_enabled = true
@@ -743,6 +753,13 @@ max_concurrent_jobs = 10       # Parallel background jobs
 | `PORT` | Listening port | `7860` (app.py) / `8000` (uvicorn) |
 | `DEBUG` | Verbose debug logging | `false` |
 | `SPACES_ZERO_GPU` | ZeroGPU leasing flag (auto-set by Hugging Face) | `None` |
+| `HF_HUB_OFFLINE` | Block all Hugging Face Hub network calls | `0` |
+| `HF_HOME` | Hugging Face cache directory | `~/.cache/huggingface` |
+| `TMPDIR` | Temp directory (point to tmpfs in containers) | OS default |
+| `EMBEDDING_N_GPU_LAYERS` | Embedding layers offloaded to GPU | `-1` |
+| `RERANKER_N_GPU_LAYERS` | Reranker layers offloaded to GPU | `-1` |
+| `CUDA_CACHE_PATH` | CUDA JIT cache directory (point to tmpfs in containers) | `~/.nv/ComputeCache` |
+| `DOCNEEDLE_DEV_ALLOW_DUMPABLE` | Bypass kernel core-dump hardening (dev only) | `0` |
 
 ---
 
@@ -760,6 +777,8 @@ max_concurrent_jobs = 10       # Parallel background jobs
 | `uv run ruff check . [--fix]` | Lint (optionally auto-fix) |
 | `uv run ruff format .` | Format code (Python 3.14 profile) |
 | `bash scripts/deploy_space.sh [SPACE_ID]` | Deploy to Hugging Face Spaces (ZeroGPU) |
+| `sudo docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --wait` | Start hardened headless GPU container |
+| `sudo docker compose -f docker-compose.prod.yml down` | Stop and remove the container |
 
 ---
 
@@ -768,7 +787,7 @@ max_concurrent_jobs = 10       # Parallel background jobs
 DocNeedle uses `pytest` and `pytest-asyncio` (`asyncio_mode = "auto"`).
 
 ```bash
-# Fast unit tests (159 tests, <4 s, no model weights)
+# Fast unit tests (159 tests, ~15 s, no model weights)
 uv run pytest tests/ \
   --ignore=tests/test_extraction.py \
   --ignore=tests/test_multimodal_extraction.py \
@@ -806,41 +825,37 @@ The script automatically executes the following:
 
 ### Docker (Headless Production)
 
-#### 1. Download Model Weights (Prerequisite)
-
-Before launching the container, ensure quantized model weights are downloaded to the host's `models/` directory (mounted read-only into `/app/models`):
-
 ```bash
-uv run python scripts/download_models.py
-```
-
-#### 2. Launch Container
-
-**With NVIDIA GPU Acceleration (Recommended for Production):**
-
-Requires `nvidia-container-toolkit` on the host. If not already installed:
-
-```bash
-# Install NVIDIA Container Toolkit (Ubuntu/Debian)
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-  && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+# 1. NVIDIA Container Toolkit (required for GPU passthrough)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 sudo apt-get update && sudo apt-get install -y nvidia-container-toolkit
 sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
+
+# 2. Model weights on host (container is read-only + offline, cannot download itself)
+uv run python scripts/download_models.py
+
+# Start — --wait blocks until the healthcheck passes
+sudo docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d --wait
+
+# Verify
+curl -f http://localhost:8000/healthz
 ```
 
-Launch container with GPU passthrough:
+- Without `docker-compose.gpu.yml` the container has no GPU access and extraction fails.
+- Measured peak VRAM with all three models on GPU: `7286 MiB / 8188 MiB` (RTX 4060 Laptop). On 8 GB cards set `reranker_enabled = false` or lower `n_ctx` if you hit OOM.
+- Models load lazily on the first request (~10 s cold, ~2.3 s warm).
 
-```bash
-docker compose -f docker-compose.prod.yml -f docker-compose.gpu.yml up -d
-```
-
-**CPU-Only Profile (or CI Environments):**
+**CPU-only / development profile:**
 
 ```bash
 docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+Requires `INSTALL_CPU_LLAMA=true` and `gpu_enabled=false`. Container-level end-to-end CPU extraction is not validated in CI; development use only.
 
 This deployment:
 - Starts a headless FastAPI microservice on port `8000` (no Gradio UI)
@@ -848,7 +863,7 @@ This deployment:
 - Directs CUDA JIT compilation cache to volatile memory via `CUDA_CACHE_PATH=/tmp/nv-cache`
 - Activates and verifies Linux kernel anti-dump hardening (`PR_SET_DUMPABLE=0`) in container logs
 
-#### 3. Verify Health & Perform Test Extraction
+#### Verification
 
 Verify that all neural models are active on GPU (`all_ready: true` and `device: "cuda"`):
 
@@ -877,9 +892,11 @@ curl -X POST "http://localhost:8000/v1/extract" \
 | `could not select device driver "nvidia"` | `nvidia-container-toolkit` missing on host | Install toolkit: `sudo apt-get install -y nvidia-container-toolkit && sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` |
 | `libGL.so.1: cannot open shared object file` | Missing OpenGL runtime in headless Linux | `sudo apt-get install -y libgl1 libglib2.0-0` |
 | `FileNotFoundError: Missing required model: ...` | Weights not downloaded or wrong `MODEL_STORAGE_DIR` | `uv run python scripts/download_models.py`, or `export MODEL_STORAGE_DIR=/path/to/models` |
-| CUDA Out of Memory | Context size or layer offload exceeds VRAM | Lower `llm_n_gpu_layers` (e.g. `16`–`20`); keep `model_kv_cache_type_k/v = 1`; set `reranker_enabled = false` |
+| CUDA Out of Memory | Context size or layer offload exceeds VRAM | Lower `llm_n_gpu_layers` (e.g. `16`–`20`) or `n_ctx`. Keep `model_kv_cache_type_v = 8` (Q8_0); switching it to FP16 doubles that buffer. Set `reranker_enabled = false` to reclaim VRAM. Default config offloads LLM + embedding + reranker to GPU (~7.3 GB measured). |
 | `Address already in use` (7860 / 8000) | Port held by another instance | `lsof -i :7860` then `kill -9 <PID>`, or `PORT=7861 uv run python app.py` |
 | `libdocneedle_embed.so: cannot open shared object file` | Native library missing from `src/docneedle/retrieval/` | Verify the file exists; to rebuild: `cd src/docneedle/retrieval && g++ -O3 -shared -fPIC -std=c++17 docneedle_embed.cpp -o libdocneedle_embed.so -I../../../.venv/lib/python3.14/site-packages/include -L. -Wl,-rpath,'$ORIGIN' -lllama -lggml_llamacpp -lggml-base -lggml-cpu -lmtmd` |
+| `libmtmd.so: undefined symbol: _Z26llama_model_n_tokens_delay...` | Retrieval DSO set and `llama-cpp-python` wheel come from different `llama.cpp` builds | Ensure all `retrieval/*.so` come from one consistent build; do not mix `.so.0` versioned symlinks with unversioned `SONAME`s |
+| `curl: (52) Empty reply from server` right after `compose up` | Container started but uvicorn has not bound yet (~2 s); Docker accepts the host connection before the app is ready | Use `up -d --wait`, or poll `/healthz` before sending requests |
 | `ModuleNotFoundError: No module named 'docneedle'` | Package not installed or `src` not on `PYTHONPATH` | `uv pip install -e .` |
 
 ---
@@ -895,7 +912,7 @@ Contributions are welcome. Please follow these standards:
    ```bash
    uv run ruff check .
    uv run ruff format .
-   uv run pytest tests/test_clean_modules.py tests/test_collision.py tests/test_acroform.py
+   uv run pytest tests/ --ignore=tests/test_extraction.py --ignore=tests/test_multimodal_extraction.py --ignore=tests/test_retrieval.py --ignore=tests/test_jobs.py -v
    ```
 5. **Pull request:** Describe motivation, implementation details, and verification steps.
 
