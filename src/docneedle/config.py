@@ -169,7 +169,7 @@ class Settings(BaseSettings):
         return bool(v)
 
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 7860
     cors_origins: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",

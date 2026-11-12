@@ -71,7 +71,10 @@ logger = logging.getLogger("DocNeedleSpace")
 logging.basicConfig(level=logging.INFO)
 
 # 1. Automatic model bootstrapping for Hugging Face Spaces and local startup
-if os.environ.get("SKIP_MODEL_BOOTSTRAP", "").lower() not in ("1", "true"):
+if os.environ.get("SKIP_MODEL_BOOTSTRAP", "").lower() not in (
+    "1",
+    "true",
+) and os.environ.get("HF_HUB_OFFLINE", "").lower() not in ("1", "true"):
     try:
         from scripts.download_models import ensure_all_models_present
 
@@ -2215,6 +2218,12 @@ from docneedle.api.routes_jobs import router as jobs_router  # noqa: E402
 from docneedle.main import health_check  # noqa: E402
 
 # Mount directly onto demo.app for environments where demo.launch() does not accept _app kwarg
+demo.app.title = settings.app_name
+demo.app.version = settings.app_version
+demo.app.description = "Privacy-first local RAG document extraction microservice"
+demo.app.docs_url = "/docs"
+demo.app.redoc_url = "/redoc"
+demo.app.setup()
 demo.app.include_router(extract_router)
 demo.app.include_router(jobs_router)
 demo.app.add_api_route("/healthz", health_check, methods=["GET"])
@@ -2236,7 +2245,7 @@ if __name__ == "__main__":
     # Enforce kernel-level non-dumpable memory protection to prevent core dump leaks
     harden_process()
 
-    port = int(os.environ.get("PORT", 7860))
+    port = int(os.environ.get("PORT", settings.port))
     logger.info(f"--> [STARTUP] Starting DocNeedle on 0.0.0.0:{port}...")
     res = demo.launch(
         server_name="0.0.0.0",

@@ -481,7 +481,7 @@ class DocNeedleBenchmarkClient:
 
     def __init__(
         self,
-        api_url: str = "http://localhost:8000",
+        api_url: str = "http://localhost:7860",
         batch_size: int = 35,
         enable_reranker: bool = False,
         timeout: float | None = None,
@@ -968,12 +968,11 @@ async def run_benchmark(
         except Exception:
             console.print(
                 f"\n[bold red]Hata: DocNeedle API ({api_url}) bağlanılamadı![/bold red]\n"
-                f"[yellow]Lütfen önce ayrı bir terminalde API sunucusunu başlatın:[/yellow]\n"
-                f"  [bold cyan]uv run uvicorn docneedle.main:app --host 0.0.0.0 --port 8000"
+                f"[yellow]Lütfen önce ayrı bir terminalde sunucuyu başlatın:[/yellow]\n"
+                f"  [bold cyan]uv run python app.py[/bold cyan]\n"
+                f"[dim]veya sadece API sunucusu için:[/dim]\n"
+                f"  [bold cyan]uv run uvicorn docneedle.main:app --host 0.0.0.0 --port 7860"
                 f"[/bold cyan]\n"
-                f"[dim]veya Gradio arayüzü çalışıyorsa (port 7860):[/dim]\n"
-                f"  [bold cyan]uv run python scripts/benchmark_extractbench.py "
-                f"--api-url http://localhost:7860 --split {split}[/bold cyan]\n"
             )
             return
 
@@ -1142,7 +1141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-url",
         type=str,
-        default="http://localhost:8000",
+        default="http://localhost:7860",
         help="DocNeedle REST API base URL.",
     )
     parser.add_argument(

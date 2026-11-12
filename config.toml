@@ -26,7 +26,7 @@ host = "0.0.0.0"
 
 # EN: TCP port number on which the FastAPI / Gradio application listens
 # TR: FastAPI / Gradio uygulamasının çalışacağı TCP port numarası
-port = 8000
+port = 7860
 
 # EN: Allowed Cross-Origin Resource Sharing (CORS) origins permitted to communicate with the REST API
 # TR: REST API ile iletişim kurmasına izin verilen CORS (Çapraz Kaynak Paylaşımı) kökenleri

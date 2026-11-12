@@ -1,41 +1,81 @@
+# ==============================================================================
+# DocNeedle Unified Container Compose Configuration (docker-compose.yml)
+#
+# Provides hardware-aware `gpu` and `cpu` profiles in a single compose file with
+# complete kernel hardening, read-only rootfs, RAM-backed tmpfs, offline
+# enforcement, and zero disk leakage on unified port 7860 (Gradio UI + FastAPI).
+#
+# Usage:
+#   GPU (Production / Local NVIDIA GPU):
+#     sudo docker compose --profile gpu up -d --wait
+#   CPU (CI / Development without NVIDIA GPU):
+#     docker compose --profile cpu up -d --wait
+# ==============================================================================
+
+x-docneedle-common: &docneedle-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      INSTALL_CPU_LLAMA: ${INSTALL_CPU_LLAMA:-false}
+  restart: unless-stopped
+  read_only: true
+  tmpfs:
+    - /tmp:rw,nosuid,size=1024m
+  ulimits:
+    core: 0
+  ports:
+    - "7860:7860"
+  volumes:
+    # Model weights mounted read-only to preserve weights integrity
+    - ./models:/app/models:ro
+    # Pipeline configuration mounted read-only for live tuning
+    - ./config.toml:/app/config.toml:ro
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:7860/healthz"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 45s
+
+x-docneedle-env: &docneedle-env
+  HOST: 0.0.0.0
+  PORT: 7860
+  TMPDIR: /tmp
+  CUDA_CACHE_PATH: /tmp/nv-cache
+  HF_HOME: /app/hf-cache
+  XDG_CACHE_HOME: /tmp/cache
+  GRADIO_TEMP_DIR: /tmp/gradio
+  GRADIO_ANALYTICS_ENABLED: "false"
+  HF_HUB_DISABLE_TELEMETRY: "1"
+  HF_HUB_OFFLINE: "1"
+  SKIP_MODEL_BOOTSTRAP: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  MODEL_STORAGE_DIR: /app/models
+  CONFIG_TOML: /app/config.toml
+
 services:
-  docneedle:
-    build:
-      context: .
-      dockerfile: Dockerfile
+  docneedle-gpu:
+    <<: *docneedle-common
+    profiles: ["gpu"]
     container_name: docneedle
-    restart: unless-stopped
-    read_only: true
-    tmpfs:
-      - /tmp:rw,nosuid,size=1024m
-    ulimits:
-      core: 0
-    ports:
-      - "7860:7860"
     environment:
-      - HOST=0.0.0.0
-      - PORT=7860
-      - TMPDIR=/tmp
-      - CUDA_CACHE_PATH=/tmp/nv-cache
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - HF_HOME=/app/hf-cache
-      - XDG_CACHE_HOME=/tmp/cache
-      - GRADIO_TEMP_DIR=/tmp/gradio
-      - GRADIO_ANALYTICS_ENABLED=false
-      - HF_HUB_DISABLE_TELEMETRY=1
-      - HF_HUB_OFFLINE=1
-      - PYTHONDONTWRITEBYTECODE=1
-      - MODEL_STORAGE_DIR=/app/models
-      - CONFIG_TOML=/app/config.toml
-    volumes:
-      # Model weights mounted read-only to preserve weights integrity
-      - ./models:/app/models:ro
-      # Pipeline configuration mounted read-only for live tuning
-      - ./config.toml:/app/config.toml:ro
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7860/healthz"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 45s
+      <<: *docneedle-env
+      GPU_ENABLED: "true"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  docneedle-cpu:
+    <<: *docneedle-common
+    profiles: ["cpu"]
+    container_name: docneedle
+    environment:
+      <<: *docneedle-env
+      GPU_ENABLED: "false"

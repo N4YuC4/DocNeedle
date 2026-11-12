@@ -88,32 +88,32 @@ jobs:
           mkdir -p models/embedding models/llm models/reranker
           touch models/embedding/dummy.gguf
 
-      - name: Build and launch hardened headless container
+      - name: Build and launch hardened container (CPU profile)
         env:
           INSTALL_CPU_LLAMA: "true"
         run: |
-          docker compose -f docker-compose.prod.yml build --build-arg INSTALL_CPU_LLAMA=true
-          docker compose -f docker-compose.prod.yml up -d
+          docker compose --profile cpu build --build-arg INSTALL_CPU_LLAMA=true
+          docker compose --profile cpu up -d --wait
 
       - name: Verify kernel non-dumpable log in container
         run: |
           for i in {1..30}; do
-            if docker logs docneedle-api 2>&1 | grep "PR_SET_DUMPABLE=0"; then
+            if docker logs docneedle 2>&1 | grep "PR_SET_DUMPABLE=0"; then
               exit 0
             fi
             sleep 1
           done
           echo "ERROR: Timed out waiting for PR_SET_DUMPABLE=0 log in container"
-          docker logs docneedle-api
+          docker logs docneedle
           exit 1
 
       - name: Verify health endpoint under read-only rootfs
         run: |
-          curl --retry 5 --retry-delay 3 --retry-all-errors -f http://localhost:8000/healthz
+          curl --retry 5 --retry-delay 3 --retry-all-errors -f http://localhost:7860/healthz
 
       - name: Verify unsupported format fail-fast (HTTP 415) under read-only rootfs
         run: |
-          status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/v1/extract \
+          status=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:7860/v1/extract \
             -F "files=@Dockerfile" \
             -F 'schema=[{"key":"title","description":"test"}]')
           echo "HTTP Status for unsupported upload: $status"
@@ -122,4 +122,4 @@ jobs:
       - name: Tear down container
         if: always()
         run: |
-          docker compose -f docker-compose.prod.yml down
+          docker compose --profile cpu down

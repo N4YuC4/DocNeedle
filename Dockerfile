@@ -45,8 +45,7 @@ RUN uv pip install --system --no-deps .
 ENV HF_HOME=/app/hf-cache
 RUN python -c "from transformers import AutoTokenizer; AutoTokenizer.from_pretrained('Qwen/Qwen3-Reranker-0.6B')"
 
-# Port 7860 is the standard port for the unified Gradio UI + FastAPI root app (e.g. Hugging Face Spaces).
-# For headless microservice API deployments on port 8000, see docker-compose.prod.yml.
+# Port 7860 serves both the Gradio 6 Web Dashboard and the FastAPI REST API.
 EXPOSE 7860
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=45s --retries=3 \
