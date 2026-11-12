@@ -224,11 +224,12 @@ def preload_modular_backends() -> bool:
         for base_name in ("libggml.so", "libggml-base.so", "libggml_llamacpp.so"):
             lib_path = lib_dir / base_name
             if lib_path.is_file():
-                libggml = ctypes.CDLL(str(lib_path), mode=ctypes.RTLD_GLOBAL)
+                # Use default RTLD_LOCAL (never RTLD_GLOBAL) so llama_cpp's ggml symbols
+                # do not interpose over the hermetic 0.7.0 runtime in docneedle/retrieval/.
+                libggml = ctypes.CDLL(str(lib_path))
                 if hasattr(libggml, "ggml_backend_load_all_from_path"):
                     libggml.ggml_backend_load_all_from_path.argtypes = [ctypes.c_char_p]
                     libggml.ggml_backend_load_all_from_path(str(lib_dir).encode("utf-8"))
-                    os.environ["GGML_BACKEND_SEARCH_PATH"] = str(lib_dir)
                     logger.info(
                         "--> [CUDA Backends] Preloaded modular llama.cpp backends from %s",
                         lib_dir,

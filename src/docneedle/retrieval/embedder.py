@@ -6,6 +6,7 @@ and raw image documents in the same cross-modal vector space.
 
 import ctypes
 import logging
+import os
 import threading
 from pathlib import Path
 
@@ -115,7 +116,26 @@ class EmbeddingGemma2Embedder(BaseEmbedder):
         retrieval_dir = Path(__file__).resolve().parent
         so_path = _ensure_docneedle_embed_lib(retrieval_dir)
 
-        self._lib = ctypes.CDLL(str(so_path))
+        dlopen_mode = getattr(os, "RTLD_NOW", 2) | getattr(os, "RTLD_LOCAL", 0)
+        if hasattr(os, "RTLD_DEEPBIND"):
+            dlopen_mode |= os.RTLD_DEEPBIND
+
+        for dep_name in (
+            "libggml-base.so",
+            "libggml-cpu.so",
+            "libggml-cuda.so",
+            "libggml_llamacpp.so",
+            "libllama.so",
+            "libmtmd.so",
+        ):
+            dep_path = retrieval_dir / dep_name
+            if dep_path.is_file():
+                try:
+                    ctypes.CDLL(str(dep_path), mode=dlopen_mode)
+                except Exception as e:
+                    logger.debug("Optional retrieval DSO load skipped (%s): %s", dep_name, e)
+
+        self._lib = ctypes.CDLL(str(so_path), mode=dlopen_mode)
 
         self._lib.docneedle_embed_init.restype = ctypes.c_void_p
         self._lib.docneedle_embed_init.argtypes = [
