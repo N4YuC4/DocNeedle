@@ -72,7 +72,7 @@ jobs:
         run: |
           docker run --rm \
             --read-only \
-            --tmpfs /tmp:rw,noexec,nosuid,size=1024m \
+            --tmpfs /tmp:rw,nosuid,size=1024m \
             --ulimit core=0 \
             docneedle:test
 

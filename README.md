@@ -349,7 +349,7 @@ DocNeedle enforces privacy guarantees at the kernel and container level:
 
 **Container Hardening (`docker-compose.prod.yml`):**
 - Read-only root filesystem (`read_only: true`)
-- RAM-backed `/tmp` via tmpfs (1GB, `noexec`, `nosuid`)
+- RAM-backed `/tmp` via tmpfs (1GB, `nosuid`, zero disk persistence)
 - Core dump size limited to 0 (`ulimits: core: 0`)
 - Offline Hugging Face mode (`HF_HUB_OFFLINE=1`)
 
@@ -844,7 +844,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 This deployment:
 - Starts a headless FastAPI microservice on port `8000` (no Gradio UI)
-- Enforces strict zero-disk isolation via read-only rootfs (`read_only: true`) and RAM-backed `tmpfs` (1GB, `noexec`, `nosuid`)
+- Enforces strict zero-disk isolation via read-only rootfs (`read_only: true`) and RAM-backed `tmpfs` (1GB, `nosuid`)
 - Directs CUDA JIT compilation cache to volatile memory via `CUDA_CACHE_PATH=/tmp/nv-cache`
 - Activates and verifies Linux kernel anti-dump hardening (`PR_SET_DUMPABLE=0`) in container logs
 
