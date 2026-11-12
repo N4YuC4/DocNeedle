@@ -45,7 +45,7 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
-      - name: Run fast unit test suite (159 tests, kernel hardening & zero-disk)
+      - name: Run fast unit test suite (160 tests, kernel hardening & zero-disk)
         run: |
           CUDA_DIRS=$(uv run python -c "import docneedle.cuda_compat as c; print(':'.join(map(str, c.configure_cuda_library_paths())))")
           export LD_LIBRARY_PATH="${CUDA_DIRS}:${LD_LIBRARY_PATH}"
@@ -111,9 +111,10 @@ jobs:
           docker logs docneedle
           exit 1
 
-      - name: Verify health endpoint under read-only rootfs
+      - name: Verify health and Swagger docs endpoints under read-only rootfs
         run: |
           curl --retry 5 --retry-delay 3 --retry-all-errors -f http://localhost:7860/healthz
+          curl -f http://localhost:7860/docs | grep -q "swagger-ui"
 
       - name: Verify unsupported format fail-fast (HTTP 415) under read-only rootfs
         run: |

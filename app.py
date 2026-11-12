@@ -2217,29 +2217,24 @@ from docneedle.api.routes_extract import router as extract_router  # noqa: E402
 from docneedle.api.routes_jobs import router as jobs_router  # noqa: E402
 from docneedle.main import health_check  # noqa: E402
 
-# Mount directly onto demo.app for environments where demo.launch() does not accept _app kwarg
-demo.app.title = settings.app_name
-demo.app.version = settings.app_version
-demo.app.description = "Privacy-first local RAG document extraction microservice"
-demo.app.docs_url = "/docs"
-demo.app.redoc_url = "/redoc"
-demo.app.setup()
-demo.app.include_router(extract_router)
-demo.app.include_router(jobs_router)
-demo.app.add_api_route("/healthz", health_check, methods=["GET"])
-demo.app.add_api_route("/health", health_check, methods=["GET"])
+_APP_KWARGS: dict[str, Any] = {
+    "title": settings.app_name,
+    "version": settings.app_version,
+    "description": "Privacy-first local RAG document extraction microservice",
+    "docs_url": "/docs",
+    "redoc_url": "/redoc",
+}
 
-gradio_app = App(
-    title=settings.app_name,
-    version=settings.app_version,
-    description="Privacy-first local RAG document extraction microservice",
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
-gradio_app.include_router(extract_router)
-gradio_app.include_router(jobs_router)
-gradio_app.add_api_route("/healthz", health_check, methods=["GET"])
-gradio_app.add_api_route("/health", health_check, methods=["GET"])
+
+def _mount_api_routes(target_app: Any) -> None:
+    """Attach DocNeedle REST endpoints and health checks onto a FastAPI/Gradio app."""
+    target_app.include_router(extract_router)
+    target_app.include_router(jobs_router)
+    target_app.add_api_route("/healthz", health_check, methods=["GET"])
+    target_app.add_api_route("/health", health_check, methods=["GET"])
+    # Invalidate cached schema so /openapi.json and /docs reflect newly mounted routes.
+    target_app.openapi_schema = None
+
 
 if __name__ == "__main__":
     # Enforce kernel-level non-dumpable memory protection to prevent core dump leaks
@@ -2254,6 +2249,7 @@ if __name__ == "__main__":
         footer_links=[],
         css=CUSTOM_CSS,
         ssr_mode=False,
+        app_kwargs=_APP_KWARGS,
     )
     server_app = (
         res[0]
@@ -2261,16 +2257,15 @@ if __name__ == "__main__":
         else getattr(demo, "server_app", getattr(demo, "app", None))
     )
     if server_app is not None:
-        server_app.include_router(extract_router)
-        server_app.include_router(jobs_router)
-        server_app.add_api_route("/healthz", health_check, methods=["GET"])
-        server_app.add_api_route("/health", health_check, methods=["GET"])
+        _mount_api_routes(server_app)
         logger.info(
             "--> [STARTUP] FastAPI REST routes successfully mounted onto active Gradio server_app."
         )
     demo.block_thread()
 else:
     # Mount Gradio dashboard onto root path for external ASGI runners (e.g. uvicorn app:app)
+    gradio_app = App(**_APP_KWARGS)
+    _mount_api_routes(gradio_app)
     app = gr.mount_gradio_app(
         gradio_app,
         demo,

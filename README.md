@@ -259,7 +259,7 @@ uv run uvicorn docneedle.main:app --host 0.0.0.0 --port 7860 --reload
 DocNeedle/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                # CI: lint, 159 unit tests, container enforcement, smoke
+│       └── ci.yml                # CI: lint, 160 unit tests, container enforcement, smoke
 ├── assets/
 │   ├── logo.svg / logo.png       # Vector and raster brand logos
 │   ├── favicon.svg               # Application favicon
@@ -409,7 +409,7 @@ DocNeedle enforces privacy guarantees at the kernel and container level:
 **CI/CD Pipeline (GitHub Actions):**
 | Job | Purpose |
 |---|---|
-| `lint-and-unit-tests` | 159 tests, ruff, zero-disk parser validation |
+| `lint-and-unit-tests` | 160 tests, ruff, zero-disk parser validation |
 | `container-zero-disk-enforcement` | Read-only rootfs + tmpfs Docker test |
 | `container-service-smoke` | Health check, 415 fail-fast, kernel log verification |
 
@@ -815,7 +815,7 @@ max_concurrent_jobs = 10       # Parallel background jobs
 | `uv run python scripts/download_models.py [--embedding\|--llm\|--reranker]` | Download all models (~4.5 GB) or a single group |
 | `uv run python scripts/benchmark_extractbench.py --split short` | Run the ExtractBench evaluation |
 | `uv run pytest` | Full automated test suite (requires model weights) |
-| `uv run pytest tests/ --ignore=tests/test_extraction.py --ignore=tests/test_multimodal_extraction.py --ignore=tests/test_retrieval.py --ignore=tests/test_jobs.py -v` | Fast unit test suite (159 tests, kernel hardening & zero-disk, no models needed) |
+| `uv run pytest tests/ --ignore=tests/test_extraction.py --ignore=tests/test_multimodal_extraction.py --ignore=tests/test_retrieval.py --ignore=tests/test_jobs.py -v` | Fast unit test suite (160 tests, kernel hardening & zero-disk, no models needed) |
 | `uv run pytest tests/test_health.py` | `/healthz` and route tests |
 | `uv run ruff check . [--fix]` | Lint (optionally auto-fix) |
 | `uv run ruff format .` | Format code (Python 3.14 profile) |
@@ -830,7 +830,7 @@ max_concurrent_jobs = 10       # Parallel background jobs
 DocNeedle uses `pytest` and `pytest-asyncio` (`asyncio_mode = "auto"`).
 
 ```bash
-# Fast unit tests (159 tests, ~15 s, no model weights)
+# Fast unit tests (160 tests, ~15 s, no model weights)
 uv run pytest tests/ \
   --ignore=tests/test_extraction.py \
   --ignore=tests/test_multimodal_extraction.py \

@@ -115,6 +115,39 @@ async def test_unified_app_docs_endpoint() -> None:
         response = await client.get("/docs")
         assert response.status_code == 200
         assert "swagger-ui" in response.text
+        redoc = await client.get("/redoc")
+        assert redoc.status_code == 200
+        assert "redoc" in redoc.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_launched_gradio_app_docs_and_openapi_routes() -> None:
+    """Verify Blocks.launch(app_kwargs=_APP_KWARGS) + _mount_api_routes exposes /docs and /v1/*."""
+    from gradio.routes import App
+
+    from app import _APP_KWARGS, _mount_api_routes, demo
+
+    launched_app = App.create_app(demo, app_kwargs=dict(_APP_KWARGS))
+    _mount_api_routes(launched_app)
+
+    transport = ASGITransport(app=launched_app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        docs = await client.get("/docs")
+        assert docs.status_code == 200
+        assert "swagger-ui" in docs.text
+        assert "DocNeedle" in docs.text
+
+        redoc = await client.get("/redoc")
+        assert redoc.status_code == 200
+
+        openapi = await client.get("/openapi.json")
+        assert openapi.status_code == 200
+        spec = openapi.json()
+        assert spec["info"]["title"] == "DocNeedle"
+        paths = set(spec["paths"].keys())
+        assert "/healthz" in paths
+        assert "/v1/extract" in paths
+        assert "/v1/jobs" in paths
 
 
 def test_create_app_factory() -> None:
